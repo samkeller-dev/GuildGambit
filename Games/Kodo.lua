@@ -42,14 +42,6 @@ local function Begin(game)
         ns.UI.SelectTab("arcade")
     end)
     ns.Arcade.StartDuel(game)
-    ns.Arcade.ShowOpponent(game)
-    -- ask for their run (and ask again if it doesn't arrive - a message may get lost)
-    local function ask()
-        if Games.Get(game.id) ~= game or game.oppRun then return end
-        Comm.Send("WATCH", { id = game.id, v = 2 }, game.opponent)
-        C_Timer.After(5, ask)
-    end
-    ask()
     ns.UI.Refresh()
 end
 
@@ -380,24 +372,4 @@ end)
 
 function KD.RemoveRunWatcher(game, name)
     if game.runWatchers then game.runWatchers[name] = nil end
-end
-
---- My duel opponent's run (RUNS / RUN), for the side panel. True if it was theirs.
-function KD.OpponentRun(f, sender)
-    local game = Games.Get(f.id or "") or (KD.finishedRuns and KD.finishedRuns[f.id or ""])
-    if not game or game.kind ~= "kodo" or not ns.SameName(game.opponent, sender) then return false end
-    game.oppRun = { from = sender, next = (tonumber(f.n) or 0) + 1 }
-    ns.Arcade.FollowOpponent(tonumber(f.z), f.c, { t = tonumber(f.t) or 0, x = tonumber(f.x) or 4,
-        r = tonumber(f.r) or 0, cam = tonumber(f.m), score = tonumber(f.sc) or 0,
-        over = (f.o and f.o ~= "") and f.o or nil })
-    return true
-end
-
-function KD.OpponentRunBatch(f, sender)
-    local game = Games.Get(f.id or "") or (KD.finishedRuns and KD.finishedRuns[f.id or ""])
-    if not game or game.kind ~= "kodo" or not ns.SameName(game.opponent, sender) then return false end
-    if game.oppRun then
-        ns.Live.TakeRun(game.oppRun, f, sender, function(events, k) ns.Arcade.FeedOpponent(events, k) end)
-    end
-    return true
 end
