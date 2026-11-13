@@ -231,6 +231,26 @@ commands.reset = function(password)
     end
 end
 
+-- what the Live tab knows, for tracking down "my game isn't showing"
+commands.live = function()
+    local Live, Comm = ns.Live, ns.Comm
+    local reg = {}
+    for prefix, res in pairs(Comm.registered or {}) do reg[#reg + 1] = prefix .. "=" .. res end
+    ns.Print("Live: prefixes [%s] | messages waiting to send: %d", table.concat(reg, ", "), Comm.Waiting())
+    local mine = ns.Games.Mine()
+    if mine then
+        ns.Print("Your game: %s (%s) - you %s announce it; %d watching", mine.title or mine.kind, mine.state or "?",
+            Live.IsAnnouncer(mine) and "do" or "don't (the other player does)", Live.WatcherCount(mine))
+    end
+    local n = 0
+    for id, g in pairs(Live.games) do
+        n = n + 1
+        ns.Print("  %s - from %s, heard %ds ago%s%s", g.h or id, ns.Short(g.host), math.floor(GetTime() - (g.seen or 0)),
+            g.ended and (" - ended: " .. g.ended) or "", Live.watching == id and " - WATCHING" or "")
+    end
+    if n == 0 then ns.Print("  No games heard from other guildies.") end
+end
+
 commands.who = function()
     local peers = ns.House.OnlinePeers()
     if #peers == 0 then ns.Print("No guildies with GuildGambit online right now.") return end

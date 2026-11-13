@@ -39,15 +39,21 @@ function Comm.Decode(text)
     return msgType, fields
 end
 
--- Spectator traffic goes on its own prefix, so it has its own share of WoW's addon-message
--- allowance and can never crowd out the games' own messages.
+-- 1.8.0 sent spectator traffic on a second prefix. Some clients may not be able to register
+-- another prefix (WoW caps them), and then never see live games - so everything is sent on the
+-- one proven prefix again. We still listen on the old one, for players on 1.8.0. Spectator
+-- messages wait behind game messages in the queue below, so they can't crowd games out.
 Comm.LIVE_PREFIX = "GGLIVE"
 local LIVE_TYPES = { LIVE = true, LIVE_END = true, SPEC = true, STATE = true, RUNS = true, RUN = true, RUNREQ = true }
 
+Comm.registered = {} -- prefix -> WoW's answer when we registered it (for /gg live)
+
 function Comm.RegisterPrefix()
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-        pcall(C_ChatInfo.RegisterAddonMessagePrefix, Comm.PREFIX)
-        pcall(C_ChatInfo.RegisterAddonMessagePrefix, Comm.LIVE_PREFIX)
+        for _, prefix in ipairs({ Comm.PREFIX, Comm.LIVE_PREFIX }) do
+            local ok, res = pcall(C_ChatInfo.RegisterAddonMessagePrefix, prefix)
+            Comm.registered[prefix] = ok and tostring(res) or ("error: " .. tostring(res))
+        end
     end
 end
 
@@ -112,7 +118,7 @@ function Comm.Send(msgType, fields, target, opts)
     local channel = target and "WHISPER" or "GUILD"
     if channel == "GUILD" and IsInGuild and not IsInGuild() then return false end
     local live = LIVE_TYPES[msgType] or false
-    local m = { prefix = live and Comm.LIVE_PREFIX or Comm.PREFIX, text = text, channel = channel, target = target,
+    local m = { prefix = Comm.PREFIX, text = text, channel = channel, target = target,
         key = opts and opts.key }
     local q = live and Comm.live or Comm.queue
     ns.Debug("-> %s %s", target and ns.Short(target) or "GUILD", text)

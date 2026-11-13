@@ -834,7 +834,6 @@ function Arcade.Input(action)
         -- a duel run can't be re-run; once it's settled, Space starts a practice run
         if (action == "start" or action == "click") and (not g.duel or g.duelResult) then
             main:New()
-            Arcade.HideOpponent()
         end
         return
     end
@@ -881,12 +880,19 @@ local function RefreshChooser()
         -- a duel: make it obvious who you're up against, and the score between you
         local mine = ns.IsMe(duel.a) and "a" or "b"
         local theirs = mine == "a" and "b" or "a"
-        panel.score:SetText(("|cffff4040DUEL|r vs |cffffd100%s|r  -  %s      You |cffffffff%d|r : |cffffffff%d|r Them"):format(
+        local theirScore = duel.scores and duel.scores[theirs] or 0
+        local theyDone = duel.finishedRun and duel.finishedRun[theirs]
+        panel.score:SetText(("|cffff4040DUEL|r vs |cffffd100%s|r  -  %s      You |cffffffff%d|r : |cffffffff%d|r %s"):format(
             ns.Short(duel.opponent), ns.Stake(duel.bet or 0), duel.scores and duel.scores[mine] or g.score,
-            duel.scores and duel.scores[theirs] or 0))
+            theirScore, ns.Short(duel.opponent)))
+        -- and on the game screen itself, top right: who you're up against and how they're doing
+        panel.vs.name:SetText(("vs |cffffd100%s|r"):format(ns.Short(duel.opponent)))
+        panel.vs.score:SetText(("%d%s"):format(theirScore, theyDone and "  |cffbbbbbbfinal|r" or ""))
+        panel.vs:Show()
     else
         panel.score:SetText(("Score  |cffffffff%d|r      Best  |cffffd100%d|r      Coins  |cffffd100%d|r"):format(
             g and g.score or 0, Arcade.Best(), db.arcadeCoins))
+        panel.vs:Hide()
     end
 end
 
@@ -922,6 +928,22 @@ function Arcade.Build(p)
     canvas:EnableMouse(true)
     canvas:SetScript("OnMouseDown", function() Arcade.Input("click") end)
     main.OnRender = RefreshChooser
+
+    -- in a duel: the opponent and their score, in a box on the game screen
+    local vs = CreateFrame("Frame", nil, canvas, "BackdropTemplate")
+    vs:SetPoint("TOPRIGHT", -6, -6)
+    vs:SetSize(150, 52)
+    vs:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    vs:SetBackdropColor(0, 0, 0, 0.7)
+    vs:SetBackdropBorderColor(1, 0.25, 0.25, 1)
+    vs:SetFrameLevel(canvas:GetFrameLevel() + 15)
+    vs.name = vs:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    vs.name:SetPoint("TOP", 0, -8)
+    vs.score = vs:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    vs.score:SetPoint("TOP", vs.name, "BOTTOM", 0, -2)
+    vs:Hide()
+    p.vs = vs
 
     -- buttons, for playing with the mouse
     local function Btn(label, action, x)
@@ -995,81 +1017,9 @@ function Arcade.Build(p)
     main:New()
 end
 
----------------------------------------------------------------------------
--- In a duel: your opponent's run, live, in a panel beside the window (replayed from their hops
--- like a spectator's view)
----------------------------------------------------------------------------
-local OPP_SCALE = 0.5
-local opp
-
-local function BuildOpponent()
-    if opp then return opp end
-    local parent = ns.UI and ns.UI.Frame and ns.UI.Frame() or UIParent
-    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    f:SetSize(COLS * TILE * OPP_SCALE + 20, VIEW_ROWS * TILE * OPP_SCALE + 64)
-    f:SetPoint("TOPLEFT", parent, "TOPRIGHT", -6, -40)
-    f:SetBackdrop({ bgFile = Art.GAME.dialogBg, edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 32, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    f:SetBackdropBorderColor(0.9, 0.72, 0.3, 1)
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.title:SetPoint("TOP", 0, -10)
-    f.score = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.score:SetPoint("TOP", f.title, "BOTTOM", 0, -4)
-    local holder = CreateFrame("Frame", nil, f)
-    holder:SetSize(COLS * TILE * OPP_SCALE, VIEW_ROWS * TILE * OPP_SCALE)
-    holder:SetPoint("BOTTOM", 0, 10)
-    local e = Arcade.NewEngine({ spectator = true })
-    local canvas = e:BuildCanvas(holder)
-    canvas:SetScale(OPP_SCALE)
-    canvas:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
-    e:New()
-    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", 2, 2)
-    close:SetScript("OnClick", function() f:Hide() end)
-    f:SetScript("OnUpdate", function()
-        local dt = GetTime() - (f.last or GetTime())
-        f.last = GetTime()
-        if e.g and e.g.queue then e:Replay(dt) end
-        e:Render()
-        local game = f.game
-        if game then
-            local theirs = ns.IsMe(game.a) and "b" or "a"
-            local done = game.finishedRun and game.finishedRun[theirs]
-            f.score:SetText(("Score |cffffffff%d|r%s"):format(game.scores and game.scores[theirs] or 0,
-                done and "  |cffffd100final|r" or ""))
-        end
-    end)
-    f:Hide()
-    opp = { frame = f, engine = e }
-    return opp
-end
-
---- Shows the opponent panel for a duel (their run arrives via FollowOpponent / FeedOpponent).
-function Arcade.ShowOpponent(game)
-    local o = BuildOpponent()
-    o.frame.game = game
-    o.frame.title:SetText(("|cffffd100%s|r's run"):format(ns.Short(game.opponent)))
-    o.engine:New()
-    o.frame:Show()
-end
-
-function Arcade.FollowOpponent(seed, char, snap)
-    local o = BuildOpponent()
-    o.engine:Follow(seed, char or "gnome", snap)
-end
-
-function Arcade.FeedOpponent(events, knownTime)
-    if opp then opp.engine:Feed(events, knownTime) end
-end
-
-function Arcade.HideOpponent()
-    if opp then opp.frame:Hide() end
-end
-
 -- for the mock-client tests
 function Arcade._Step(dt) if main.g then main:Step(dt) main:Render() end end
 function Arcade._State() return main.g end
 function Arcade._Canvas() return main.canvas end
 function Arcade._Row(r) return main.g and Row(main.g, r) end
 function Arcade._PlaceMovers(row, t) PlaceMovers(row, t) end
-function Arcade._Opponent() return opp end

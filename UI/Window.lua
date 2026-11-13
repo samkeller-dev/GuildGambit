@@ -1334,9 +1334,15 @@ local function RefreshLive(p)
         r:SetShown(g ~= nil)
         if g then
             r.id = g.id
-            r.text:SetText((g.h or "?") .. (g.ended and "  |cff888888(finished)|r" or ""))
-            r.watch:SetText(g.id == Live.watching and "Watching" or "Watch")
-            if g.ended and g.id ~= Live.watching then r.watch:Disable() else r.watch:Enable() end
+            if g.own then
+                r.text:SetText("|cff20ff20(you)|r " .. (g.h or "?"))
+                r.watch:SetText("Playing")
+                r.watch:Disable()
+            else
+                r.text:SetText((g.h or "?") .. (g.ended and "  |cff888888(finished)|r" or ""))
+                r.watch:SetText(g.id == Live.watching and "Watching" or "Watch")
+                if g.ended and g.id ~= Live.watching then r.watch:Disable() else r.watch:Enable() end
+            end
         end
     end
     local g = Live.watching and Live.games[Live.watching]

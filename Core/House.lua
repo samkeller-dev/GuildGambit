@@ -388,6 +388,12 @@ C_Timer.After(1, Tick)
 function Live.List()
     local list = {}
     for _, g in pairs(Live.games) do list[#list + 1] = g end
+    -- my own game too (at the top), so I can see it's live for the guild
+    local mine = ns.Games and ns.Games.Mine()
+    if mine and not mine.practice and not mine.asHouse and mine.state ~= "invite" and mine.kind ~= "slots" then
+        local ok, h = pcall(Live.Describe, mine)
+        if ok then list[#list + 1] = { id = mine.id, h = h, own = true, first = math.huge } end
+    end
     -- games still running first, newest first
     table.sort(list, function(x, y)
         if (x.ended == nil) ~= (y.ended == nil) then return x.ended == nil end
@@ -660,8 +666,6 @@ end
 -- A duel run, for the Live tab's replay: RUNS = where the run is now (when we start watching),
 -- RUN = the hops since. p = "a" or "b", the player's side.
 Comm.On("RUNS", function(f, sender)
-    local own = ns.Kodo and ns.Kodo.OpponentRun and ns.Kodo.OpponentRun(f, sender)
-    if own then return end -- my duel opponent's run, for the Arcade tab's side view
     local g = Live.games[f.id or ""]
     if not g or Live.watching ~= f.id or (f.p ~= "a" and f.p ~= "b") then return end
     g.runs = g.runs or {}
@@ -700,7 +704,6 @@ function Live.TakeRun(run, f, sender, feed)
 end
 
 Comm.On("RUN", function(f, sender)
-    if ns.Kodo and ns.Kodo.OpponentRunBatch and ns.Kodo.OpponentRunBatch(f, sender) then return end
     local g = Live.games[f.id or ""]
     local run = g and g.runs and g.runs[f.p or ""]
     if not run or Live.watching ~= f.id or not ns.SameName(run.from, sender) then return end

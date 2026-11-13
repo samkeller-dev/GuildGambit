@@ -5,6 +5,13 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 1.8.1 - 2026-11-14
+
+- **Fix: games not showing in the Live tab.** 1.8.0 announced games on a second message channel, which some setups can't receive. Everything is back on GuildGambit's original channel (spectator messages still wait behind game messages, so they can't slow games down), and 1.7.0 players can see 1.8 games again.
+- **Kodo Crossing duels:** the side panel with your opponent's run is gone (it didn't work for everyone). Instead the game screen shows a box with who you're up against and their score, live, next to the "DUEL vs ..." header.
+- Live tab: your own game is listed too, marked "(you)", so you can see it's live for the guild.
+- New `/gg live` command: shows what the Live tab knows (for tracking down problems).
+
 ## 1.8.0 - 2026-11-13
 
 - **Spectating fixed:** the Live view stopped updating (deathroll numbers froze, Kodo Crossing replays got stuck) because WoW only lets an addon send a few messages a second and silently refuses the rest. Messages are now queued and retried instead of lost, with game messages always first; spectator traffic has its own channel, goes out once to the guild instead of once per watcher, and is merged when it piles up. A Kodo Crossing replay that misses some hops asks for exactly those again.
