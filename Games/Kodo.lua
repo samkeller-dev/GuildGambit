@@ -42,6 +42,14 @@ local function Begin(game)
         ns.UI.SelectTab("arcade")
     end)
     ns.Arcade.StartDuel(game)
+    ns.Arcade.ShowOpponent(game)
+    -- ask for their run (and ask again if it doesn't arrive - a message may get lost)
+    local function ask()
+        if Games.Get(game.id) ~= game or game.oppRun then return end
+        Comm.Send("WATCH", { id = game.id, v = 2 }, game.opponent)
+        C_Timer.After(5, ask)
+    end
+    ask()
     ns.UI.Refresh()
 end
 
@@ -87,6 +95,8 @@ local function Resolve(game)
     local mine, theirs = game.scores[me], game.scores[them]
     local outcome = mine > theirs and 1 or (mine < theirs and -1 or 0)
     KD.done[game.id] = { score = mine, opponent = game.opponent }
+    KD.finishedRuns = KD.finishedRuns or {}
+    KD.finishedRuns[game.id] = game
     local summary = ("you %d vs %s %d"):format(mine, ns.Short(game.opponent), theirs)
     Games.Finish(game, game.bet * outcome, summary, outcome)
     local text = outcome > 0 and ("|cff20ff20You beat %s's %d - %s!|r"):format(ns.Short(game.opponent), theirs,
@@ -127,6 +137,7 @@ function KD.RunOver(game, score)
     local me = MySide(game)
     if game.finishedRun[me] then return end
     game.scores[me], game.finishedRun[me] = score, true
+    game.runEndAt = GetTime()
     if KD.FlushRun then KD.FlushRun(game) end -- spectators see the end straight away
     ns.UI.SetRollPrompt(nil)
     game.status = ("Your run: %d. Waiting for %s..."):format(score, ns.Short(game.opponent))
@@ -304,48 +315,89 @@ function KD.DecodeEvents(text)
     return out
 end
 
---- Sends each watcher the events they haven't had yet, plus how far my run has got.
-local function FlushRun(game)
-    local snap = ns.Arcade.Snapshot(game)
-    if not snap or not game.runWatchers then return end
+--- Events from index i on, as RUN messages (several if there are many).
+local function SendRun(game, i, target)
     local log = game.runLog or {}
-    local side = MySide(game)
-    for name, nextIndex in pairs(game.runWatchers) do
-        local i = nextIndex
-        repeat
-            local parts, size = {}, 0
-            while i <= #log and size < KD.RUN_CHUNK do
-                local s = EncodeEvent(log[i])
-                parts[#parts + 1] = s
-                size = size + #s + 1
-                i = i + 1
-            end
-            Comm.Send("RUN", { id = game.id, p = side, k = ("%.2f"):format(snap.t), e = table.concat(parts, ";") }, name)
-        until i > #log
-        game.runWatchers[name] = i
-    end
+    local snap = ns.Arcade.Snapshot(game)
+    local k = ("%.2f"):format(snap and snap.t or 0)
+    repeat
+        local parts, size, first = {}, 0, i
+        while i <= #log and size < KD.RUN_CHUNK do
+            local s = EncodeEvent(log[i])
+            parts[#parts + 1] = s
+            size = size + #s + 1
+            i = i + 1
+        end
+        -- (never merged: each batch carries different hops)
+        Comm.Send("RUN", { id = game.id, p = MySide(game), i = first, n = #log, k = k, e = table.concat(parts, ";") }, target)
+    until i > #log
+    return i
 end
+
+--- Once a batch: one broadcast with my new hops (however many are watching), plus how far
+--- my run has got, so replays keep moving even while I stand still.
+local function FlushRun(game)
+    if not game.runWatchers or not next(game.runWatchers) then return end
+    game.runSent = SendRun(game, game.runSent or 1, nil)
+end
+
+-- after my run ends, keep saying where it ended for a while: anyone who lost the last
+-- batches sees they're missing hops and asks for them
+KD.RUN_LINGER = 20
 
 local function RunTicker(game)
     FlushRun(game)
-    if Games.Get(game.id) == game then C_Timer.After(KD.RUN_BATCH, function() RunTicker(game) end) end
+    local active = Games.Get(game.id) == game and not game.runEndAt
+    if active or GetTime() - (game.runEndAt or 0) < KD.RUN_LINGER then
+        C_Timer.After(KD.RUN_BATCH, function() RunTicker(game) end)
+    end
 end
 KD.FlushRun = FlushRun
 
---- Someone wants to watch this duel: send them where my run is, then my hops as they happen.
+--- Someone wants to watch this duel (a spectator, or my opponent): send them where my run is
+--- now; my broadcasts carry on from there.
 function KD.AddRunWatcher(game, name)
     game.runWatchers = game.runWatchers or {}
-    if not game.runWatchers[name] and next(game.runWatchers) == nil then
+    game.runLog = game.runLog or {}
+    if next(game.runWatchers) == nil then
+        game.runSent = #game.runLog + 1
         C_Timer.After(KD.RUN_BATCH, function() RunTicker(game) end)
     end
-    game.runLog = game.runLog or {}
-    game.runWatchers[name] = #game.runLog + 1
+    game.runWatchers[name] = true
     local snap = ns.Arcade.Snapshot(game) or { t = 0, x = 4, r = 0, cam = -1, score = 0, seed = game.seed, char = "gnome" }
     Comm.Send("RUNS", { id = game.id, p = MySide(game), z = snap.seed or game.seed, c = snap.char,
         t = ("%.2f"):format(snap.t), x = snap.x, r = snap.r, m = ("%.2f"):format(snap.cam), sc = snap.score,
-        o = snap.over or "" }, name)
+        o = snap.over or "", n = #game.runLog }, name)
 end
+
+--- A watcher missed some hops: send them again from index i.
+Comm.On("RUNREQ", function(f, sender)
+    local game = Games.Get(f.id) or (KD.finishedRuns and KD.finishedRuns[f.id or ""])
+    local i = tonumber(f.i)
+    if not game or not i or not game.runLog then return end
+    SendRun(game, math.max(1, i), sender)
+end)
 
 function KD.RemoveRunWatcher(game, name)
     if game.runWatchers then game.runWatchers[name] = nil end
+end
+
+--- My duel opponent's run (RUNS / RUN), for the side panel. True if it was theirs.
+function KD.OpponentRun(f, sender)
+    local game = Games.Get(f.id or "") or (KD.finishedRuns and KD.finishedRuns[f.id or ""])
+    if not game or game.kind ~= "kodo" or not ns.SameName(game.opponent, sender) then return false end
+    game.oppRun = { from = sender, next = (tonumber(f.n) or 0) + 1 }
+    ns.Arcade.FollowOpponent(tonumber(f.z), f.c, { t = tonumber(f.t) or 0, x = tonumber(f.x) or 4,
+        r = tonumber(f.r) or 0, cam = tonumber(f.m), score = tonumber(f.sc) or 0,
+        over = (f.o and f.o ~= "") and f.o or nil })
+    return true
+end
+
+function KD.OpponentRunBatch(f, sender)
+    local game = Games.Get(f.id or "") or (KD.finishedRuns and KD.finishedRuns[f.id or ""])
+    if not game or game.kind ~= "kodo" or not ns.SameName(game.opponent, sender) then return false end
+    if game.oppRun then
+        ns.Live.TakeRun(game.oppRun, f, sender, function(events, k) ns.Arcade.FeedOpponent(events, k) end)
+    end
+    return true
 end

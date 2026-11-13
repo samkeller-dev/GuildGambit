@@ -5,6 +5,12 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 1.8.0 - 2026-11-13
+
+- **Spectating fixed:** the Live view stopped updating (deathroll numbers froze, Kodo Crossing replays got stuck) because WoW only lets an addon send a few messages a second and silently refuses the rest. Messages are now queued and retried instead of lost, with game messages always first; spectator traffic has its own channel, goes out once to the guild instead of once per watcher, and is merged when it piles up. A Kodo Crossing replay that misses some hops asks for exactly those again.
+- **Kodo Crossing duels:** your opponent's run plays live in a panel beside the window, and the Arcade tab says who you're up against ("DUEL vs ... - You 12 : 9 Them").
+- **Live tab:** finished games leave the list straight away (the one you're watching shows its result for a few seconds first).
+
 ## 1.7.0 - 2026-11-13
 
 - **Kodo Crossing** - a new lane-crossing arcade game in its own **Arcade** tab: hop across roads full of kodos and raptors, stampede lanes, and rivers with drifting logs and lily pads. Collect coins to unlock characters (gnome, orc, night elf, tauren, forsaken). Every 40 rows you enter a new zone (Elwynn, the Barrens, Winterspring). Arrow keys / WASD, P to pause.
