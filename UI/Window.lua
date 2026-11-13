@@ -777,9 +777,93 @@ local function BuildBoard(p)
 end
 
 ---------------------------------------------------------------------------
+-- Live: games other guildies are playing right now, and watching one
+---------------------------------------------------------------------------
+local LIVE_ROWS, LIVE_ROW_H = 7, 26
+
+local function BuildLive(p)
+    local title = Label(p, "Games in progress", "GameFontNormal")
+    title:SetPoint("TOPLEFT", 0, 0)
+    p.empty = Label(p, "|cff888888Nobody in the guild is playing right now.|r", "GameFontHighlight")
+    p.empty:SetPoint("TOPLEFT", 0, -26)
+    p.rows = {}
+    for i = 1, LIVE_ROWS do
+        local r = CreateFrame("Frame", nil, p)
+        r:SetSize(W - 40, LIVE_ROW_H)
+        r:SetPoint("TOPLEFT", 0, -20 - (i - 1) * LIVE_ROW_H)
+        r.text = Label(r, "", "GameFontHighlight")
+        r.text:SetPoint("LEFT", 0, 0)
+        r.text:SetWidth(W - 40 - 96)
+        r.text:SetWordWrap(false)
+        r.id = nil
+        r.watch = Button(r, "Watch", 86, function()
+            local id = rawget(r, "id")
+            if id == ns.Live.watching then ns.Live.Unwatch() elseif id then ns.Live.Watch(id) end
+        end)
+        r.watch:SetPoint("RIGHT", 0, 0)
+        p.rows[i] = r
+    end
+    -- what you're watching
+    local box = CreateFrame("Frame", nil, p, "BackdropTemplate")
+    box:SetPoint("TOPLEFT", 0, -20 - LIVE_ROWS * LIVE_ROW_H - 12)
+    box:SetPoint("BOTTOMRIGHT", 0, 0)
+    box:SetBackdrop({
+        bgFile = Art.GAME.marble, edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 128, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    box:SetBackdropColor(0.35, 0.3, 0.25, 1)
+    box:SetBackdropBorderColor(0.9, 0.72, 0.3, 1)
+    p.box = box
+    local function Line(template, anchor, gap)
+        local l = Label(box, "", template)
+        if anchor then l:SetPoint("TOP", anchor, "BOTTOM", 0, gap) else l:SetPoint("TOP", 0, gap) end
+        l:SetWidth(W - 70)
+        l:SetJustifyH("CENTER")
+        return l
+    end
+    box.head = Line("GameFontNormalLarge", nil, -16)
+    box.l1 = Line("GameFontHighlightLarge", box.head, -18)
+    box.l2 = Line("GameFontHighlightLarge", box.l1, -12)
+    box.result = Line("GameFontNormalLarge", box.l2, -18)
+    box.stop = Button(box, "Stop watching", 120, function() ns.Live.Unwatch() end)
+    box.stop:SetPoint("BOTTOM", 0, 12)
+end
+
+local function RefreshLive(p)
+    local Live = ns.Live
+    local list = Live.List()
+    p.empty:SetShown(#list == 0)
+    for i, r in ipairs(p.rows) do
+        local g = list[i]
+        r:SetShown(g ~= nil)
+        if g then
+            r.id = g.id
+            r.text:SetText((g.h or "?") .. (g.ended and "  |cff888888(finished)|r" or ""))
+            r.watch:SetText(g.id == Live.watching and "Watching" or "Watch")
+            if g.ended and g.id ~= Live.watching then r.watch:Disable() else r.watch:Enable() end
+        end
+    end
+    local g = Live.watching and Live.games[Live.watching]
+    local box = p.box
+    if not g then
+        box.head:SetText("|cff888888Pick a game above to watch it live.|r")
+        box.l1:SetText("")
+        box.l2:SetText("")
+        box.result:SetText("")
+        box.stop:Hide()
+        return
+    end
+    box.head:SetText(g.h or "")
+    box.l1:SetText(g.l1 or "|cff888888Joining...|r")
+    box.l2:SetText(g.l2 or "")
+    box.result:SetText(g.ended and ("|cffffd100" .. g.ended .. "|r") or "")
+    box.stop:Show()
+end
+
+---------------------------------------------------------------------------
 -- Window
 ---------------------------------------------------------------------------
-local TABS = { { "play", "Play" }, { "ledger", "Ledger" }, { "board", "Leaderboard" } }
+local TABS = { { "play", "Play" }, { "live", "Live" }, { "ledger", "Ledger" }, { "board", "Leaderboard" } }
 local LOG_LINES = 5 -- the log at the bottom: one line each, newest last, never taller than this
 
 local function SelectTab(name)
@@ -825,13 +909,14 @@ local function Build()
     local x = 18
     for _, def in ipairs(TABS) do
         local key = def[1]
-        local t = Button(frame, def[2], 140, function() SelectTab(key) end)
+        local t = Button(frame, def[2], 104, function() SelectTab(key) end)
         t:SetPoint("TOPLEFT", x, -36)
         tabs[key] = t
-        x = x + 145
+        x = x + 108
     end
 
     BuildPlay(Panel("play"))
+    BuildLive(Panel("live"))
     BuildLedger(Panel("ledger"))
     BuildBoard(Panel("board"))
 
@@ -958,6 +1043,10 @@ local function RefreshPlay(p)
     else
         p.status:SetText("")
     end
+    local watchers = game and ns.Live and ns.Live.WatcherCount(game) or 0
+    if watchers > 0 then
+        p.status:SetText(p.status:GetText() .. ("  |cffbbbbbb(%d watching)|r"):format(watchers))
+    end
     if prompt then
         p.roll:SetText(prompt.label or ("Roll " .. prompt.lo .. "-" .. prompt.hi))
         p.roll:Enable()
@@ -1063,6 +1152,7 @@ function UI.Refresh()
     if panels.play:IsShown() then RefreshPlay(panels.play) end
     if panels.ledger:IsShown() then RefreshLedger(panels.ledger) end
     if panels.board:IsShown() then RefreshBoard(panels.board) end
+    if panels.live and panels.live:IsShown() then RefreshLive(panels.live) end
     -- newest entry on the bottom line; strip the /gg accept hints, the popup covers those
     local log = ns.logLines
     for i, line in ipairs(frame.logLines) do

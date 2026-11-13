@@ -60,9 +60,6 @@ function OnRoll(game, roller, v, verified)
         if iLost then
             game.deathCry = true
             ns.Sound("death")
-        elseif not game.practice then
-            ns.GuildAnnounce(("[GuildGambit] %s won a deathroll against %s %s!"):format(ns.Short(ns.Me()),
-                ns.Short(roller), game.stake > 0 and ("for " .. ns.Money(game.stake)) or "just for fun"))
         end
         Games.Finish(game, iLost and -game.stake or game.stake,
             ("%s rolled a 1 after %d rolls"):format(iLost and "you" or ns.Short(roller), #game.history),

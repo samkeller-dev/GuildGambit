@@ -9,7 +9,7 @@ local DEFAULTS = {
     guildOnly = true,       -- only accept games from guild members
     whisperRolls = true,    -- whisper our rolls to opponents outside our group
     sound = true,           -- in-game sound effects
-    announce = true,        -- post deathroll wins in guild chat
+    announce = true,        -- post wins in guild chat
     maxLedger = 500,        -- ledger entries kept
     window = { shown = false, point = "CENTER", x = 0, y = 0, tab = "play" },
     house = { maxBet = 100 }, -- gold
