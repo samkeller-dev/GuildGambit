@@ -175,6 +175,7 @@ Comm.On("SLD_INV", function(f, sender)
     local bet, n = tonumber(f.s), tonumber(f.n) or 1
     if not f.id or not bet or bet < 0 or n < 1 or n > SL.MAX_SPINS or n % 1 ~= 0 then return end
     local function no(reason) Comm.Send("SLD_NO", { id = f.id, r = reason }, sender) end
+    do return no("Slots was retired in GuildGambit 1.7.0 - challenge them to Kodo Crossing instead") end
     if Games.Busy() then return no("busy") end
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local why = ns.House.CheckOpponent(sender) -- e.g. their GuildGambit is outdated (shown in chat)

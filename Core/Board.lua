@@ -80,7 +80,7 @@ end)
 
 --- My stats from the ledger (this season's real games only).
 function Board.MyStats()
-    local s = { net = 0, games = 0, wins = 0, losses = 0, best = 0, wagered = 0 }
+    local s = { net = 0, games = 0, wins = 0, losses = 0, best = 0, wagered = 0, streak = 0, drop = 0 }
     local season = Board.Season()
     local since = season and season.localStart or 0
     for _, e in ipairs(ns.charDB.ledger) do
@@ -92,11 +92,19 @@ function Board.MyStats()
                 local r = e.result or e.net -- result: who won a 0g game
                 if r > 0 then s.wins = s.wins + 1 elseif r < 0 then s.losses = s.losses + 1 end
                 s.wagered = s.wagered + (e.wager or math.abs(e.net)) -- older entries: the amount won/lost
+                -- current streak: wins (+) or losses (-) in a row, newest last; pushes don't break it
+                if r > 0 then s.streak = s.streak > 0 and s.streak + 1 or 1
+                elseif r < 0 then s.streak = s.streak < 0 and s.streak - 1 or -1 end
             end
+            -- biggest range we rolled a 1 from (deathroll and group deathroll)
+            if (e.drop or 0) > s.drop then s.drop = e.drop end
         end
     end
     local _, raceFile = UnitRace("player")
     s.race, s.sex = Compat.Safe(raceFile), Compat.Safe(UnitSex("player"))
+    -- Kodo Crossing: best run ever, and the character it was run with
+    s.arcade = ns.charDB.arcadeBest or 0
+    s.char = ns.Arcade and ns.Arcade.Character() or "gnome"
     return s
 end
 
@@ -118,12 +126,15 @@ local function Store(name, s)
     t[name] = {
         net = tonumber(s.net) or 0, games = tonumber(s.games) or 0, wins = tonumber(s.wins) or 0,
         losses = tonumber(s.losses) or 0, best = tonumber(s.best) or 0, wagered = tonumber(s.wagered) or 0,
+        streak = tonumber(s.streak) or 0, drop = tonumber(s.drop) or 0,
+        arcade = tonumber(s.arcade) or 0, char = s.char,
         race = s.race, sex = tonumber(s.sex), seen = time(),
     }
 end
 
 local function Fields(s)
     return { n = s.net, g = s.games, w = s.wins, l = s.losses, b = s.best, t = s.wagered or 0,
+        k = s.streak or 0, d = s.drop or 0, ar = s.arcade or 0, ac = s.char or "",
         r = s.race or "", x = s.sex or 0 }
 end
 
@@ -154,7 +165,8 @@ function Board.Ranked()
     for name, s in pairs(Board.Table()) do
         if s.games and s.games > 0 then
             list[#list + 1] = { name = name, net = s.net, games = s.games, wins = s.wins, losses = s.losses,
-                best = s.best, wagered = s.wagered or 0, race = s.race, sex = s.sex }
+                best = s.best, wagered = s.wagered or 0, streak = s.streak or 0, drop = s.drop or 0,
+                race = s.race, sex = s.sex }
         end
     end
     table.sort(list, function(a, b)
@@ -164,8 +176,32 @@ function Board.Ranked()
     return list
 end
 
+--- Kodo Crossing high scores: { { name, score, char } }, best first.
+function Board.HighScores()
+    Board.CleanSelf()
+    local list = {}
+    for name, s in pairs(Board.Table()) do
+        if (s.arcade or 0) > 0 then list[#list + 1] = { name = name, score = s.arcade, char = s.char or "gnome" } end
+    end
+    table.sort(list, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.name < b.name
+    end)
+    return list
+end
+
+--- The guild's biggest drop to 1 this season: name, range (or nil).
+function Board.BiggestDrop()
+    local who, best = nil, 0
+    for name, s in pairs(Board.Table()) do
+        if (s.drop or 0) > best then who, best = name, s.drop end
+    end
+    return who, best > 0 and best or nil
+end
+
 Comm.On("STATS", function(f, sender)
     Store(sender, { net = f.n, games = f.g, wins = f.w, losses = f.l, best = f.b, wagered = f.t,
+        streak = f.k, drop = f.d, arcade = f.ar, char = f.ac ~= "" and f.ac or nil,
         race = f.r ~= "" and f.r or nil, sex = f.x })
     if ns.UI then ns.UI.Refresh() end
 end)

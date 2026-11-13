@@ -12,7 +12,7 @@ local HELP = {
     "Wagers: 10 (gold), 1.5, or gold/silver/copper like 1g 50s 25c. 0 = just for fun.",
     "/gg dr <player|practice> <wager> [start] - deathroll (default start 1000)",
     "/gg group <wager> [start] - open a group deathroll for the guild | /gg start - start it",
-    "/gg slots <wager> <player|practice> [spins] - slots, higher total payout wins",
+    "/gg kodo <wager> <player|practice> - Kodo Crossing: one run each on the same lanes, higher score wins",
     "/gg bj <wager> <player|practice> - blackjack",
     "/gg flip <wager> <player|practice> [alliance|horde] - coinflip: heads Alliance, tails Horde",
     "/gg roll | hit | stand | double | cancel - act in your game",
@@ -62,14 +62,18 @@ commands.dr = function(...)
 end
 commands.deathroll = commands.dr
 
--- "/gg slots <gold> <player words...> [spins]"
-commands.slots = function(gold, ...)
-    local words = { ... }
-    local spins
-    if #words > 1 and tonumber(words[#words]) then spins = table.remove(words) end
-    ns.Slots.Spin(#words > 0 and table.concat(words, " ") or nil, gold, spins)
+-- Slots was retired in 1.7.0, replaced by Kodo Crossing
+commands.slots = function()
+    ns.Print("Slots has been retired - challenge someone to Kodo Crossing instead: |cffffff00/gg kodo <wager> <player>|r")
 end
 commands.spin = commands.slots
+
+-- "/gg kodo <wager> <player words...>"
+commands.kodo = function(gold, ...)
+    local words = { ... }
+    ns.Kodo.Challenge(#words > 0 and table.concat(words, " ") or nil, gold)
+end
+commands.arcade = function() ns.UI.SetShown(true) ns.UI.SelectTab("arcade") end
 
 commands.bj = function(...)
     local gold, house = NumberThenName(...)
@@ -162,9 +166,13 @@ commands.board = function()
     if #ranked == 0 then ns.Print("No games on the leaderboard yet.") return end
     for i = 1, math.min(5, #ranked) do
         local e = ranked[i]
-        ns.Print("#%d %s  %s  (%d-%d, %s wagered)", i, ns.Short(e.name), ns.Money(e.net, true), e.wins, e.losses,
-            ns.Money(e.wagered or 0))
+        local k = e.streak or 0
+        ns.Print("#%d %s  %s  (%d-%d, %s wagered)%s", i, ns.Short(e.name), ns.Money(e.net, true), e.wins, e.losses,
+            ns.Money(e.wagered or 0), k >= 4 and ("  on fire: " .. k .. " wins in a row") or
+            (k <= -4 and ("  cursed: " .. -k .. " losses in a row") or ""))
     end
+    local who, range = ns.Board.BiggestDrop()
+    if who then ns.Print("Biggest drop to 1: %s rolled a 1 from 1-%d", ns.Short(who), range) end
 end
 commands.leaderboard = commands.board
 

@@ -75,10 +75,11 @@ end
 ---------------------------------------------------------------------------
 local REEL = 64
 
-local function BuildTable(p)
+local function BuildTable(p, y)
+    y = y or -92
     local t = CreateFrame("Frame", nil, p, "BackdropTemplate")
-    t:SetPoint("TOPLEFT", 0, -92)
-    t:SetPoint("TOPRIGHT", 0, -92)
+    t:SetPoint("TOPLEFT", 0, y)
+    t:SetPoint("TOPRIGHT", 0, y)
     t:SetHeight(330)
     t:SetBackdrop({
         bgFile = Art.GAME.marble, edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -507,10 +508,6 @@ local function BuildPlay(p)
     startLabel:SetPoint("LEFT", copperIcon, "RIGHT", 12, 0)
     p.start = Input(p, 54, "1000", true, 7)
     p.start:SetPoint("LEFT", startLabel, "RIGHT", 8, 0)
-    local spinsLabel = Label(p, "Spins:")
-    spinsLabel:SetPoint("LEFT", p.start, "RIGHT", 12, 0)
-    p.spins = Input(p, 28, tostring(ns.Slots.DEFAULT_SPINS), true, 2)
-    p.spins:SetPoint("LEFT", spinsLabel, "RIGHT", 8, 0)
 
     local function target() return p.selected end
     -- "10g5s0c": empty boxes count as 0 (all empty = a game just for fun)
@@ -528,10 +525,10 @@ local function BuildPlay(p)
         ns.Deathroll.Challenge(t, bet(), p.start:GetText())
     end)
     p.dr:SetPoint("TOPLEFT", betLabel, "BOTTOMLEFT", 0, -12)
-    p.slots = Button(p, "Slots", 82, function() ns.Slots.Spin(target(), bet(), p.spins:GetText()) end)
-    p.slots:SetPoint("LEFT", p.dr, "RIGHT", 6, 0)
+    p.kodo = Button(p, "Kodo", 82, function() ns.Kodo.Challenge(target(), bet()) end)
+    p.kodo:SetPoint("LEFT", p.dr, "RIGHT", 6, 0)
     p.bj = Button(p, "Blackjack", 82, function() ns.Blackjack.Deal(target(), bet()) end)
-    p.bj:SetPoint("LEFT", p.slots, "RIGHT", 6, 0)
+    p.bj:SetPoint("LEFT", p.kodo, "RIGHT", 6, 0)
     p.cf = Button(p, "Coinflip", 82, function() ns.Coinflip.Challenge(target(), bet()) end)
     p.cf:SetPoint("LEFT", p.bj, "RIGHT", 6, 0)
     p.gdr = Button(p, "Group DR", 82, function() ns.GroupDeathroll.Open(bet(), p.start:GetText()) end)
@@ -720,6 +717,69 @@ local PODIUM = {
 local PODIUM_FLOOR = -214  -- y of the podium's bottom edge
 local ROWS, ROW_H, SMALL = 5, 26, 22
 
+-- Leaderboard sub-tabs: Gold (the podium) and Kodo Crossing (high scores).
+local HS_ROWS, HS_ROW_H = 10, 32
+
+local function BuildHighScores(p)
+    p.view = "gold"
+    local function Sub(label, view, anchor, x)
+        local b = Button(p, label, 110, function()
+            p.view = view
+            UI.Refresh()
+        end)
+        b:SetPoint(anchor, x, 0)
+        return b
+    end
+    p.subGold = Sub("Gold", "gold", "TOPLEFT", 0)
+    p.subKodo = Sub("Kodo Crossing", "kodo", "TOPRIGHT", 0)
+
+    local hs = CreateFrame("Frame", nil, p)
+    p.hs = hs
+    hs:SetPoint("TOPLEFT", 0, -30)
+    hs:SetPoint("BOTTOMRIGHT", 0, 0)
+    hs.title = Label(hs, "Kodo Crossing - high scores", "GameFontNormalLarge")
+    hs.title:SetPoint("TOP", 0, 0)
+    hs.empty = Label(hs, "|cff888888No runs yet. Play in the Arcade tab!|r", "GameFontHighlight")
+    hs.empty:SetPoint("TOP", 0, -40)
+    hs.rows = {}
+    for i = 1, HS_ROWS do
+        local r = CreateFrame("Frame", nil, hs)
+        r:SetSize(W - 60, HS_ROW_H)
+        r:SetPoint("TOP", 0, -26 - (i - 1) * HS_ROW_H)
+        r.rank = Label(r, i .. ".", "GameFontNormalLarge")
+        r.rank:SetPoint("LEFT", 10, 0)
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(28, 28)
+        r.icon:SetPoint("LEFT", 50, 0)
+        r.name = Label(r, "", "GameFontHighlightLarge")
+        r.name:SetPoint("LEFT", 90, 0)
+        r.score = Label(r, "", "GameFontNormalLarge")
+        r.score:SetPoint("RIGHT", -10, 0)
+        hs.rows[i] = r
+    end
+    hs.me = Label(hs, "", "GameFontNormal")
+    hs.me:SetPoint("BOTTOMLEFT", 0, 0)
+    hs:Hide()
+end
+
+local function RefreshHighScores(p)
+    local hs = p.hs
+    local list = ns.Board.HighScores()
+    hs.empty:SetShown(#list == 0)
+    local medal = { "ffd100", "c0c8d8", "d08048" }
+    for i, r in ipairs(hs.rows) do
+        local e = list[i]
+        r:SetShown(e ~= nil)
+        if e then
+            ns.Arcade.SetSprite(r.icon, e.char or "gnome")
+            local name = ns.IsMe(e.name) and ("|cffffd100" .. ns.Short(e.name) .. "|r") or ns.Short(e.name)
+            r.name:SetText(name)
+            r.score:SetText(("|cff%s%d|r"):format(medal[i] or "ffffff", e.score))
+        end
+    end
+    hs.me:SetText(("Your best: |cffffd100%d|r"):format(ns.Arcade.Best()))
+end
+
 local function BuildBoard(p)
     p.podium = {}
     for rank, spec in ipairs(PODIUM) do
@@ -774,96 +834,57 @@ local function BuildBoard(p)
     p.me = Label(p, "", "GameFontNormal")
     p.me:SetPoint("BOTTOMLEFT", 0, 0)
     p.me:SetWidth(W - 40)
+    p.drop = Label(p, "", "GameFontHighlight")
+    p.drop:SetPoint("BOTTOMLEFT", 0, 20)
+    p.drop:SetWidth(W - 40)
+    BuildHighScores(p)
 end
 
 ---------------------------------------------------------------------------
--- Live: games other guildies are playing right now, and watching one
+-- Live: games other guildies are playing right now, and watching one on the same table
+-- the players see (the big deathroll number, the cards, the reels, the coin).
 ---------------------------------------------------------------------------
-local LIVE_ROWS, LIVE_ROW_H = 7, 26
+local LIVE_ROWS, LIVE_ROW_H = 4, 22
 
 local function BuildLive(p)
     local title = Label(p, "Games in progress", "GameFontNormal")
     title:SetPoint("TOPLEFT", 0, 0)
     p.empty = Label(p, "|cff888888Nobody in the guild is playing right now.|r", "GameFontHighlight")
-    p.empty:SetPoint("TOPLEFT", 0, -26)
+    p.empty:SetPoint("TOPLEFT", 0, -22)
     p.rows = {}
     for i = 1, LIVE_ROWS do
         local r = CreateFrame("Frame", nil, p)
         r:SetSize(W - 40, LIVE_ROW_H)
-        r:SetPoint("TOPLEFT", 0, -20 - (i - 1) * LIVE_ROW_H)
+        r:SetPoint("TOPLEFT", 0, -16 - (i - 1) * LIVE_ROW_H)
         r.text = Label(r, "", "GameFontHighlight")
         r.text:SetPoint("LEFT", 0, 0)
         r.text:SetWidth(W - 40 - 96)
         r.text:SetWordWrap(false)
-        r.id = nil
+        r.id = false
         r.watch = Button(r, "Watch", 86, function()
             local id = rawget(r, "id")
-            if id == ns.Live.watching then ns.Live.Unwatch() elseif id then ns.Live.Watch(id) end
+            if id and id == ns.Live.watching then ns.Live.Unwatch() elseif id then ns.Live.Watch(id) end
         end)
         r.watch:SetPoint("RIGHT", 0, 0)
         p.rows[i] = r
     end
-    -- what you're watching
-    local box = CreateFrame("Frame", nil, p, "BackdropTemplate")
-    box:SetPoint("TOPLEFT", 0, -20 - LIVE_ROWS * LIVE_ROW_H - 12)
-    box:SetPoint("BOTTOMRIGHT", 0, 0)
-    box:SetBackdrop({
-        bgFile = Art.GAME.marble, edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 128, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    box:SetBackdropColor(0.35, 0.3, 0.25, 1)
-    box:SetBackdropBorderColor(0.9, 0.72, 0.3, 1)
-    p.box = box
-    local function Line(template, anchor, gap)
-        local l = Label(box, "", template)
-        if anchor then l:SetPoint("TOP", anchor, "BOTTOM", 0, gap) else l:SetPoint("TOP", 0, gap) end
-        l:SetWidth(W - 70)
-        l:SetJustifyH("CENTER")
-        return l
-    end
-    box.head = Line("GameFontNormalLarge", nil, -16)
-    box.l1 = Line("GameFontHighlightLarge", box.head, -18)
-    box.l2 = Line("GameFontHighlightLarge", box.l1, -12)
-    box.result = Line("GameFontNormalLarge", box.l2, -18)
-    box.stop = Button(box, "Stop watching", 120, function() ns.Live.Unwatch() end)
-    box.stop:SetPoint("BOTTOM", 0, 12)
-end
-
-local function RefreshLive(p)
-    local Live = ns.Live
-    local list = Live.List()
-    p.empty:SetShown(#list == 0)
-    for i, r in ipairs(p.rows) do
-        local g = list[i]
-        r:SetShown(g ~= nil)
-        if g then
-            r.id = g.id
-            r.text:SetText((g.h or "?") .. (g.ended and "  |cff888888(finished)|r" or ""))
-            r.watch:SetText(g.id == Live.watching and "Watching" or "Watch")
-            if g.ended and g.id ~= Live.watching then r.watch:Disable() else r.watch:Enable() end
-        end
-    end
-    local g = Live.watching and Live.games[Live.watching]
-    local box = p.box
-    if not g then
-        box.head:SetText("|cff888888Pick a game above to watch it live.|r")
-        box.l1:SetText("")
-        box.l2:SetText("")
-        box.result:SetText("")
-        box.stop:Hide()
-        return
-    end
-    box.head:SetText(g.h or "")
-    box.l1:SetText(g.l1 or "|cff888888Joining...|r")
-    box.l2:SetText(g.l2 or "")
-    box.result:SetText(g.ended and ("|cffffd100" .. g.ended .. "|r") or "")
-    box.stop:Show()
+    -- the same table frame as the Play tab, drawn from the game the player's addon sends us
+    BuildTable(p, -16 - LIVE_ROWS * LIVE_ROW_H - 8)
+    p.hint = Label(p, "", "GameFontHighlightLarge")
+    p.hint:SetPoint("CENTER", p.table, "CENTER", 0, 0)
+    p.hint:SetWidth(W - 80)
+    p.hint:SetJustifyH("CENTER")
+    p.info = Label(p, "", "GameFontNormal")
+    p.info:SetPoint("TOPLEFT", p.table, "BOTTOMLEFT", 2, -8)
+    p.info:SetWidth(W - 40 - 130)
+    p.stop = Button(p, "Stop watching", 120, function() ns.Live.Unwatch() end)
+    p.stop:SetPoint("TOPRIGHT", p.table, "BOTTOMRIGHT", 0, -4)
 end
 
 ---------------------------------------------------------------------------
 -- Window
 ---------------------------------------------------------------------------
-local TABS = { { "play", "Play" }, { "live", "Live" }, { "ledger", "Ledger" }, { "board", "Leaderboard" } }
+local TABS = { { "play", "Play" }, { "live", "Live" }, { "ledger", "Ledger" }, { "board", "Leaderboard" }, { "arcade", "Arcade" } }
 local LOG_LINES = 5 -- the log at the bottom: one line each, newest last, never taller than this
 
 local function SelectTab(name)
@@ -909,14 +930,18 @@ local function Build()
     local x = 18
     for _, def in ipairs(TABS) do
         local key = def[1]
-        local t = Button(frame, def[2], 104, function() SelectTab(key) end)
+        local t = Button(frame, def[2], 84, function() SelectTab(key) end)
         t:SetPoint("TOPLEFT", x, -36)
         tabs[key] = t
-        x = x + 108
+        x = x + 86
     end
 
     BuildPlay(Panel("play"))
     BuildLive(Panel("live"))
+    if ns.Arcade then
+        local ok, err = pcall(ns.Arcade.Build, Panel("arcade"))
+        if not ok then ns.Print("|cffff4040the Arcade tab failed to build: %s|r", tostring(err)) end
+    end
     BuildLedger(Panel("ledger"))
     BuildBoard(Panel("board"))
 
@@ -957,9 +982,71 @@ end
 ---------------------------------------------------------------------------
 -- Refresh
 ---------------------------------------------------------------------------
+-- Kodo Crossing duel: both runs' scores side by side, counting up live.
+local function BuildKodo(t)
+    local kd = CreateFrame("Frame", nil, t)
+    t.kd = kd
+    kd:SetAllPoints()
+    kd.title = Label(kd, "", "GameFontNormalLarge")
+    kd.title:SetPoint("TOP", 0, -18)
+    kd.title:SetJustifyH("CENTER")
+    kd.kodo = kd:CreateTexture(nil, "ARTWORK")
+    if not pcall(kd.kodo.SetTexture, kd.kodo, Art.Tex("arcade/kodo"), nil, nil, "NEAREST") then
+        kd.kodo:SetTexture(Art.Tex("arcade/kodo"))
+    end
+    kd.kodo:SetSize(128, 64)
+    kd.kodo:SetPoint("CENTER", 0, 22)
+    kd.kodo:SetAlpha(0.35)
+    kd.vs = Label(kd, "VS", "GameFontNormalHuge")
+    kd.vs:SetPoint("CENTER", 0, 0)
+    kd.sides = {}
+    for i, s in ipairs({ "a", "b" }) do
+        local x = i == 1 and -110 or 110
+        local side = {}
+        side.name = Label(kd, "", "GameFontNormalLarge")
+        side.name:SetPoint("CENTER", x, 64)
+        side.score = kd:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        pcall(side.score.SetFont, side.score, "Fonts\\FRIZQT__.TTF", 64, "THICKOUTLINE")
+        side.score:SetPoint("CENTER", x, 4)
+        side.state = Label(kd, "", "GameFontHighlight")
+        side.state:SetPoint("CENTER", x, -46)
+        kd.sides[s] = side
+    end
+    kd.result = Label(kd, "", "GameFontNormalLarge")
+    kd.result:SetPoint("BOTTOM", 0, 26)
+    kd.result:SetWidth(W - 80)
+    kd.result:SetJustifyH("CENTER")
+end
+
+local function RefreshKodo(kd, game)
+    local function nm(n) return ns.IsMe(n) and "You" or ns.Short(n) end
+    kd.title:SetText(("Kodo Crossing  -  %s"):format(ns.Stake(game.bet or 0)))
+    local scores, done = game.scores or { a = 0, b = 0 }, game.finishedRun or {}
+    local bothDone = done.a and done.b
+    for _, s in ipairs({ "a", "b" }) do
+        local side, other = kd.sides[s], s == "a" and "b" or "a"
+        local sc = scores[s] or 0
+        side.name:SetText(nm(s == "a" and game.a or game.b))
+        side.score:SetText(tostring(sc))
+        if bothDone and sc > (scores[other] or 0) then side.score:SetTextColor(0.2, 1, 0.2)
+        elseif bothDone and sc < (scores[other] or 0) then side.score:SetTextColor(1, 0.3, 0.3)
+        else side.score:SetTextColor(1, 0.84, 0.25) end
+        side.state:SetText(game.state == "invite" and "|cff888888waiting...|r"
+            or (done[s] and "|cffffd100final|r" or "|cff20ff20running...|r"))
+    end
+    if bothDone then
+        local a, b = scores.a or 0, scores.b or 0
+        kd.result:SetText(a == b and "|cffffd100A tie - push!|r" or ("|cff20ff20%s %s!|r"):format(
+            nm(a > b and game.a or game.b), (ns.IsMe(a > b and game.a or game.b)) and "win" or "wins"))
+    else
+        kd.result:SetText("")
+    end
+end
+
 local function ShowView(t, which)
     if not rawget(t, "cf") then BuildCoin(t) end
-    for _, key in ipairs({ "idle", "bj", "slots", "dr", "cf" }) do t[key]:SetShown(key == which) end
+    if not rawget(t, "kd") then BuildKodo(t) end
+    for _, key in ipairs({ "idle", "bj", "slots", "dr", "cf", "kd" }) do t[key]:SetShown(key == which) end
 end
 
 local function RefreshTable(p, game)
@@ -979,8 +1066,9 @@ local function RefreshTable(p, game)
         local theirValue = duel and ns.Blackjack.DuelValueText(game.d) or (#shown > 0 and BJ.ValueText(shown) or "")
         t.bj.dealerLabel:SetText((duel and ns.Short(game.opponent) or "Dealer")
             .. (theirValue ~= "" and ("  -  " .. theirValue) or "") .. (theirDoubled and "  (doubled)" or ""))
-        t.bj.playerLabel:SetText((game.asHouse and ns.Short(game.player) or "You") ..
-            (#game.p > 0 and ("  -  " .. BJ.ValueText(game.p)) or "") .. (myDoubled and "  (doubled)" or ""))
+        local me = (game.spectator and ns.Short(game.b)) or (game.asHouse and ns.Short(game.player)) or "You"
+        local myValue = #game.p > 0 and (duel and ns.Blackjack.DuelValueText(game.p) or BJ.ValueText(game.p)) or ""
+        t.bj.playerLabel:SetText(me .. (myValue ~= "" and ("  -  " .. myValue) or "") .. (myDoubled and "  (doubled)" or ""))
     elseif game.kind == "slots" then
         ShowView(t, "slots")
         local function ShowReels(row, result)
@@ -1011,7 +1099,7 @@ local function RefreshTable(p, game)
         end
         ShowReels(t.slots.reels, game.result)
         local mySide = duel and (ns.IsMe(game.a) and "a" or "b")
-        t.slots.result:SetText("You:  " .. ((duel and ns.Slots.Line(game, mySide)) or Name(game.result) or "Spin to play!"))
+        t.slots.result:SetText((game.spectator and (ns.Short(game.b) .. ":  ") or "You:  ") .. ((duel and ns.Slots.Line(game, mySide)) or Name(game.result) or "Spin to play!"))
     elseif game.kind == "coinflip" then
         ShowView(t, "cf")
         RefreshCoin(t.cf, game)
@@ -1022,6 +1110,9 @@ local function RefreshTable(p, game)
     elseif game.kind == "groupdr" then
         ShowView(t, "dr")
         RefreshGroup(t.dr, game)
+    elseif game.kind == "kodo" then
+        ShowView(t, "kd")
+        RefreshKodo(t.kd, game)
     end
 end
 
@@ -1062,7 +1153,7 @@ local function RefreshPlay(p)
         if ns.Blackjack.CanDouble(game) then p.double:Enable() else p.double:Disable() end
     end
     if game then p.cancel:Enable() else p.cancel:Disable() end
-    for _, b in ipairs({ p.dr, p.slots, p.bj, p.cf, p.gdr }) do
+    for _, b in ipairs({ p.dr, p.kodo, p.bj, p.cf, p.gdr }) do
         if game then b:Disable() else b:Enable() end
     end
 end
@@ -1104,8 +1195,21 @@ local function RefreshLedger(p)
     p.recent:SetText(table.concat(lines, "\n"))
 end
 
+-- more than 3 in a row: on fire, or cursed
+local STREAK = 4
+local FIRE = "|TInterface\\Icons\\Spell_Fire_Fire:14:14|t"
+local CURSE = "|TInterface\\Icons\\Spell_Shadow_CurseOfSargeras:14:14|t"
+
+local function StreakIcon(e)
+    local k = e.streak or 0
+    if k >= STREAK then return " " .. FIRE .. (k > STREAK and ("|cffff9020" .. k .. "|r") or "") end
+    if k <= -STREAK then return " " .. CURSE .. (k < -STREAK and ("|cffb070ff" .. -k .. "|r") or "") end
+    return ""
+end
+
 local function NameText(e)
-    return ns.IsMe(e.name) and ("|cffffd100" .. ns.Short(e.name) .. "|r") or ns.Short(e.name)
+    local name = ns.IsMe(e.name) and ("|cffffd100" .. ns.Short(e.name) .. "|r") or ns.Short(e.name)
+    return name .. StreakIcon(e)
 end
 
 local function NetText(e)
@@ -1114,6 +1218,18 @@ local function NetText(e)
 end
 
 local function RefreshBoard(p)
+    -- Gold (the podium) or Kodo Crossing (high scores)
+    local kodo = p.view == "kodo"
+    if kodo then p.subKodo:Disable() p.subGold:Enable() else p.subGold:Disable() p.subKodo:Enable() end
+    p.hs:SetShown(kodo)
+    for _, s in ipairs(p.podium) do s:SetShown(not kodo) end
+    p.me:SetShown(not kodo)
+    p.drop:SetShown(not kodo)
+    if kodo then
+        for _, r in ipairs(p.rows) do r:Hide() end
+        for _, l in ipairs(p.rowHeads) do l:Hide() end
+        return RefreshHighScores(p)
+    end
     local ranked = ns.Board.Ranked()
     for rank, s in ipairs(p.podium) do
         local e = ranked[rank]
@@ -1143,8 +1259,127 @@ local function RefreshBoard(p)
     for _, l in ipairs(p.rowHeads) do l:SetShown(ranked[4] ~= nil) end
     local mine
     for i, e in ipairs(ranked) do if ns.IsMe(e.name) then mine = i end end
+    local who, range = ns.Board.BiggestDrop()
+    p.drop:SetText(who and ("|TInterface\\Icons\\INV_Misc_Bone_HumanSkull_01:14:14|t Biggest drop to 1: |cffffd100%s|r rolled a 1 from |cffff4040%s|r"):format(
+        ns.Short(who), "1-" .. range) or "")
     p.me:SetText(#ranked == 0 and "No games played in this guild yet."
         or (mine and ("You are #%d of %d players."):format(mine, #ranked) or "Play a game to join the board."))
+end
+
+-- Watching a Kodo Crossing duel: both runs side by side, replayed live from each player's
+-- hops on the same seeded lanes (half size).
+local WATCH_SCALE = 0.5
+
+local function BuildKodoWatch(p)
+    if rawget(p, "kodoView") then return p.kodoView end
+    local v = CreateFrame("Frame", nil, p)
+    p.kodoView = v
+    v:SetPoint("TOPLEFT", p.table, "TOPLEFT", 0, 0)
+    v:SetPoint("BOTTOMRIGHT", p.table, "BOTTOMRIGHT", 0, 0)
+    v.engines, v.labels, v.watching = {}, {}, false
+    local A = ns.Arcade
+    local w, h = A.COLS * A.TILE * WATCH_SCALE, A.VIEW_ROWS * A.TILE * WATCH_SCALE
+    for i, side in ipairs({ "a", "b" }) do
+        local holder = CreateFrame("Frame", nil, v)
+        holder:SetSize(w, h)
+        holder:SetPoint("BOTTOM", v, "BOTTOM", (i == 1 and -1 or 1) * (w / 2 + 6), 4)
+        local e = A.NewEngine({ spectator = true })
+        local canvas = e:BuildCanvas(holder)
+        canvas:SetScale(WATCH_SCALE)
+        canvas:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
+        e:New()
+        v.engines[side] = e
+        local label = Label(v, "", "GameFontNormal")
+        label:SetPoint("BOTTOM", holder, "TOP", 0, 6)
+        label:SetWidth(w + 10)
+        label:SetJustifyH("CENTER")
+        v.labels[side] = label
+    end
+    v:SetScript("OnUpdate", function(_, elapsed)
+        for _, e in pairs(v.engines) do
+            if e.g and e.g.queue then e:Replay(elapsed) end
+            e:Render()
+        end
+    end)
+    v:Hide()
+    return v
+end
+
+--- A spectator just tuned in to one side of a duel (from Core/House.lua's RUNS handler).
+function UI.FollowRun(side, run)
+    local p = panels.live
+    if not p or not run.seed then return end
+    local v = BuildKodoWatch(p)
+    -- the replays now belong to this duel (so the first table update doesn't clear them)
+    if v.watching ~= ns.Live.watching then
+        v.watching = ns.Live.watching
+        for _, e in pairs(v.engines) do e:New() end
+    end
+    v.engines[side]:Follow(run.seed, run.char or "gnome", run.snap)
+end
+
+--- More hops for one side of the duel we're watching.
+function UI.FeedRun(side, events, knownTime)
+    local p = panels.live
+    local v = p and rawget(p, "kodoView")
+    if v then v.engines[side]:Feed(events, knownTime) end
+end
+
+local function RefreshLive(p)
+    local Live = ns.Live
+    local list = Live.List()
+    p.empty:SetShown(#list == 0)
+    for i, r in ipairs(p.rows) do
+        local g = list[i]
+        r:SetShown(g ~= nil)
+        if g then
+            r.id = g.id
+            r.text:SetText((g.h or "?") .. (g.ended and "  |cff888888(finished)|r" or ""))
+            r.watch:SetText(g.id == Live.watching and "Watching" or "Watch")
+            if g.ended and g.id ~= Live.watching then r.watch:Disable() else r.watch:Enable() end
+        end
+    end
+    local g = Live.watching and Live.games[Live.watching]
+    if not g then
+        if rawget(p, "kodoView") then p.kodoView:Hide() end
+        p.table:Hide()
+        p.hint:SetText(#list > 0 and "|cff888888Pick a game above to watch it live.|r" or "")
+        p.hint:Show()
+        p.info:SetText("")
+        p.stop:Hide()
+        return
+    end
+    p.stop:Show()
+    local kodo = g.mirror and g.mirror.kind == "kodo"
+    local v = kodo and BuildKodoWatch(p) or rawget(p, "kodoView")
+    if v then
+        -- a different duel than last time: clear the replays until the new runs arrive
+        if kodo and v.watching ~= g.id then
+            v.watching = g.id
+            for _, e in pairs(v.engines) do e:New() end
+        end
+        v:SetShown(kodo)
+    end
+    if kodo then
+        p.hint:Hide()
+        p.table:Hide()
+        local m = g.mirror
+        for _, side in ipairs({ "a", "b" }) do
+            local done = m.finishedRun and m.finishedRun[side]
+            v.labels[side]:SetText(("%s  |cffffffff%d|r%s"):format(ns.Short(side == "a" and m.a or m.b),
+                m.scores and m.scores[side] or 0, done and "  |cffffd100final|r" or ""))
+        end
+    elseif g.mirror then
+        p.hint:Hide()
+        p.table:Show()
+        RefreshTable(p, g.mirror)
+    else
+        -- a player on an older GuildGambit only sends text: show that
+        p.table:Hide()
+        p.hint:SetText(("%s\n\n%s\n%s"):format(g.h or "", g.l1 or "|cff888888Joining...|r", g.l2 or ""))
+        p.hint:Show()
+    end
+    p.info:SetText(g.ended and ("|cffffd100" .. g.ended .. "|r") or ("Watching: " .. (g.h or "")))
 end
 
 function UI.Refresh()

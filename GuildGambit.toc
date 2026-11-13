@@ -2,7 +2,7 @@
 ## Title: GuildGambit
 ## Notes: Deathroll (1v1 or group), blackjack, slots and coinflip for gold between guildies. Every result is a server /roll.
 ## Author: You
-## Version: 1.6.0
+## Version: 1.7.0
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: GuildGambitDB
@@ -25,9 +25,11 @@ Rules\Blackjack.lua
 Games\Deathroll.lua
 Games\Slots.lua
 Games\Blackjack.lua
+Games\Kodo.lua
 Core\House.lua
 UI\Art.lua
 UI\Cards.lua
 UI\Window.lua
+UI\Arcade.lua
 Core\Events.lua
 Core\Slash.lua
