@@ -13,7 +13,17 @@ function Ledger.Record(entry)
     local list = ns.charDB.ledger
     list[#list + 1] = entry
     while #list > (ns.db.maxLedger or 500) do table.remove(list, 1) end
-    if not entry.practice then Ledger.SettleIfSquare(entry.opponent) end
+    if not entry.practice then
+        local before = Ledger.Balance(entry.opponent) - entry.net
+        if Ledger.SettleIfSquare(entry.opponent) and before ~= 0 and entry.net ~= 0 then
+            -- e.g. losing 1g to someone who owed you 1g: say so, or the debt just vanishes
+            local who = ns.Short(entry.opponent)
+            C_Timer.After(0.1, function()
+                ns.Log("That evens out with %s (%s %s) - |cff20ff20you're all square|r.", who,
+                    before > 0 and "they owed you" or "you owed them", ns.Money(math.abs(before)))
+            end)
+        end
+    end
     return entry
 end
 

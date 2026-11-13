@@ -23,7 +23,7 @@ local HELP = {
     "/gg art - check the dragon frames | art <kind> cx cy d - adjust",
     "/gg undo - remove your last game (e.g. a mistyped bet)",
     "/gg whispers on|off - whisper your rolls to opponents outside your group",
-    "/gg sound on|off - sound effects | /gg announce on|off - post deathroll wins in guild chat",
+    "/gg sound on|off - sound effects | /gg announce on|off - post your wins in guild chat",
     "/gg reset <password> - new leaderboard season, clears all debts",
     "/gg minimap - show/hide the minimap button",
     "/gg guildonly on|off | debug | info",
@@ -258,7 +258,7 @@ commands.announce = function(state)
     state = (state or ""):lower()
     if state == "on" then ns.db.announce = true elseif state == "off" then ns.db.announce = false
     else ns.db.announce = not ns.db.announce end
-    ns.Print("Posting your deathroll wins in guild chat: %s", ns.db.announce and "on" or "off")
+    ns.Print("Posting your wins in guild chat: %s", ns.db.announce and "on" or "off")
 end
 
 commands.whispers = function(state)

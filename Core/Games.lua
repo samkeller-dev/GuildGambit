@@ -42,6 +42,7 @@ end
 
 function Games.Remove(game)
     Games.active[game.id] = nil
+    if game.live and ns.Live then ns.Live.End(game) end
     ns.Rolls.UnwatchPrefix(game.id .. ":")
     if ns.UI then
         -- a house game ending must not clear the Roll button of my own game
@@ -49,6 +50,10 @@ function Games.Remove(game)
         ns.UI.Refresh()
     end
 end
+
+local WON_TEXT = {
+    deathroll = "won a deathroll", blackjack = "won at blackjack", slots = "won at slots", coinflip = "won a coinflip",
+}
 
 --- Records the result for this client and ends the game.
 --- net is from this client's point of view (+ = I won). outcome (1 win, -1 loss, 0 push)
@@ -80,6 +85,12 @@ function Games.Finish(game, net, summary, outcome)
                 C_Timer.After(0.3, function() ns.Sound("cheer") end)
             end
         end
+    end
+    -- every 1v1 game: the winner's addon posts it in guild chat (so it's posted once)
+    if outcome > 0 and not practice and not game.asHouse then
+        local what = WON_TEXT[game.kind] or ("won " .. (game.title or "a game"))
+        ns.GuildAnnounce(("[GuildGambit] %s %s against %s %s!"):format(ns.Short(ns.Me()), what,
+            ns.Short(game.opponent), net > 0 and ("for " .. ns.Money(net)) or "just for fun"))
     end
     Games.Remove(game)
     if not practice and ns.Board then ns.Board.Changed() end

@@ -5,6 +5,12 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 1.6.0 - 2026-11-13
+
+- **Live tab:** see every game being played in the guild right now, all modes, and watch one live. Blackjack hole cards stay hidden until the showdown. Players see how many people are watching.
+- Guild chat now announces wins in **every** game mode: blackjack, slots and coinflip as well as deathroll and group deathroll.
+- Ledger: when a game result cancels out what was owed, the log says so ("That evens out with ... - you're all square") instead of the debt silently disappearing.
+
 ## 1.5.0 - 2026-11-13
 
 - Deathroll wins, 1v1 and group, are posted in guild chat by the winner: who won, who they beat and the wager. Turn it off with `/gg announce off`.

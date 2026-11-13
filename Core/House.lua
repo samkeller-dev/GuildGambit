@@ -152,3 +152,267 @@ Comm.On("CANCEL", function(f, sender)
         ns.Games.Cancel(game, "by " .. ns.Short(sender), true)
     end
 end)
+
+---------------------------------------------------------------------------
+-- Live games and spectators (kept in this file so it loads without changing the file list).
+--
+-- Every real game (deathroll, group deathroll, blackjack, slots, coinflip) is announced to the
+-- guild by ONE addon - the challenger's, or the group host's - with a LIVE message, repeated
+-- every LIVE_HEARTBEAT seconds while it runs and ended with LIVE_END. Guildies see them in the
+-- Live tab. Watching one sends WATCH to that addon, which then sends the watcher SPEC updates:
+-- a few lines of plain text describing the table from a neutral seat. Blackjack hole cards
+-- stay hidden until the showdown, so a spectator can't tip anyone off.
+---------------------------------------------------------------------------
+local Live = {}
+ns.Live = Live
+
+Live.HEARTBEAT = 20     -- seconds between LIVE repeats
+Live.EXPIRE = 70        -- a game we haven't heard about for this long is gone
+Live.ENDED_SHOW = 60    -- a finished game stays in the list this long, showing the result
+Live.MAX_WATCHERS = 15
+Live.LINE_MAX = 120
+Live.games = {}         -- id -> { id, host, h, a, b, seen, ended, endedAt } (other people's games)
+Live.watching = nil     -- id we're watching
+
+local function Cut(s)
+    s = tostring(s or "")
+    if #s > Live.LINE_MAX then s = s:sub(1, Live.LINE_MAX - 3) .. "..." end
+    return s
+end
+
+--- True if this addon is the one that announces this game.
+function Live.IsAnnouncer(game)
+    if not game or game.practice or game.asHouse then return false end
+    if game.kind == "groupdr" then return ns.IsMe(game.host) end
+    return game.a ~= nil and ns.IsMe(game.a) and game.state ~= "invite"
+end
+
+local function Name(n) return ns.Short(n) end
+
+-- Blackjack hand as a spectator sees it: hidden cards (unknown, or my own hole card before
+-- the showdown) as "?".
+local function HandLine(name, hand, cards, hideIndex)
+    local BJR = ns.Rules.Blackjack
+    local shown, hidden = {}, 0
+    for i, c in ipairs(cards or {}) do
+        if c and i ~= hideIndex then shown[#shown + 1] = c else hidden = hidden + 1 end
+    end
+    local text = #shown > 0 and BJR.HandText(shown) or ""
+    if hidden > 0 then text = text .. (" ?"):rep(hidden) end
+    local value = #shown > 0 and BJR.ValueText(shown) or "?"
+    local flags = ""
+    if hand and hand.doubled then flags = flags .. "  doubled" end
+    if hand and hand.done then flags = flags .. "  done" end
+    return ("%s: %s  (%s%s)%s"):format(Name(name), text ~= "" and text or "-", value, hidden > 0 and " + ?" or "", flags)
+end
+
+--- header, line 1, line 2 describing the game from a neutral seat.
+function Live.Describe(game)
+    local kind = game.kind
+    if kind == "groupdr" then
+        local each = ns.Stake(game.bet) .. (game.bet > 0 and " each" or "")
+        local h = ("Group Deathroll: %d players - %s"):format(#game.players, each)
+        local out = {}
+        for _, n in ipairs(game.out or {}) do out[n] = true end
+        local names = {}
+        for _, n in ipairs(game.players) do
+            local s = Name(n)
+            if out[n] then s = s .. " (out)" elseif game.turn and ns.SameName(game.turn, n) then s = "> " .. s end
+            names[#names + 1] = s
+        end
+        if game.state == "lobby" then
+            return h, "Waiting to start: " .. table.concat(names, ", "), ("Host: %s, 1-%d"):format(Name(game.host), game.start)
+        end
+        local lr = game.lastRoll
+        local l2 = lr and (("%s rolled %d (1-%d)"):format(Name(lr.who), lr.value, lr.max)
+            .. (lr.value == 1 and " - OUT!" or "")) or ("Starting at 1-%d"):format(game.start)
+        if game.turn then l2 = l2 .. ("  |  %s rolls 1-%d"):format(Name(game.turn), game.max) end
+        return h, table.concat(names, ", "), l2
+    end
+    local h = ("%s: %s vs %s - %s"):format(game.title or kind, Name(game.a), Name(game.b), ns.Stake(game.bet or game.stake or 0))
+    if kind == "deathroll" then
+        local lr = game.lastRoll
+        local l1 = lr and ("%s rolled %d (1-%d)"):format(Name(lr.who), lr.value, lr.max)
+            or ("%s rolls first: 1-%d"):format(Name(game.a), game.start)
+        local l2 = (game.turn and not game.finished) and ("Next: %s rolls 1-%d"):format(Name(game.turn), game.max) or ""
+        return h, l1, l2
+    elseif kind == "blackjack" and game.mode == "duel" then
+        local mySide = ns.IsMe(game.a) and "a" or "b"
+        local function line(side)
+            local hand = game.hands[side]
+            local mine = side == mySide
+            return HandLine(side == "a" and game.a or game.b, hand, hand.cards,
+                (mine and not game.finished) and game.myHole or nil)
+        end
+        return h, line("a"), line("b")
+    elseif kind == "slots" and game.mode == "duel" then
+        local function line(side)
+            local sp = game.spins[side]
+            local last = sp.last and (", last " .. sp.last.name .. (sp.last.mult > 0 and (" x" .. sp.last.mult) or "")) or ""
+            return ("%s: x%d after %d/%d spins%s"):format(Name(side == "a" and game.a or game.b), sp.total, sp.count, game.n, last)
+        end
+        return h, line("a"), line("b")
+    elseif kind == "coinflip" then
+        local CF = ns.Coinflip
+        local call = game.call and CF.Label(game.call) or "?"
+        local other = game.call and CF.Label(game.call == "A" and "H" or "A") or "?"
+        return h, ("%s calls %s, %s has %s"):format(Name(game.a), call, Name(game.b), other),
+            game.landed and ("Landed " .. CF.Label(game.landed)) or "Flipping..."
+    end
+    return h, game.status or "", ""
+end
+
+--- "Eoka won 10g from Bob" (neutral), for the end of a game.
+function Live.ResultText(game)
+    if game.kind == "groupdr" then
+        if not game.winner then return "Ended with no winner" end
+        local pot = game.bet * (#game.players - 1)
+        return ("%s is the last one standing%s"):format(Name(game.winner), pot > 0 and (" - wins " .. ns.Money(pot)) or "")
+    end
+    if not game.finished then return "Cancelled" end
+    local o = game.outcome or 0
+    if o == 0 then return "Push - nobody wins" end
+    local winner = o > 0 and ns.Me() or game.opponent
+    local loser = o > 0 and game.opponent or ns.Me()
+    local amount = math.abs(game.net or 0)
+    return ("%s beat %s%s"):format(Name(winner), Name(loser), amount > 0 and (" - wins " .. ns.Money(amount)) or " (just for fun)")
+end
+
+local function SendSpec(game, target)
+    local h, l1, l2 = Live.Describe(game)
+    Comm.Send("SPEC", { id = game.id, h = Cut(h), a = Cut(l1), b = Cut(l2) }, target)
+end
+
+--- Called when one of my games ends (from Games.Remove).
+function Live.End(game)
+    local live = game.live
+    if not live then return end
+    game.live = nil
+    Comm.Send("LIVE_END", { id = game.id, r = Cut(Live.ResultText(game)) }, nil)
+    for name in pairs(live.watchers) do SendSpec(game, name) end -- the final table
+end
+
+function Live.WatcherCount(game)
+    local n = 0
+    if game and game.live then for _ in pairs(game.live.watchers) do n = n + 1 end end
+    return n
+end
+
+--- Once a second: announce my game, update its watchers, forget stale games.
+local function Tick()
+    local now = GetTime()
+    local game = ns.Games and ns.Games.Mine()
+    if game and Live.IsAnnouncer(game) then
+        local live = game.live
+        if not live then
+            live = { sent = 0, watchers = {}, last = nil }
+            game.live = live
+        end
+        local h = Live.Describe(game)
+        if now - live.sent >= Live.HEARTBEAT or live.header ~= h then
+            live.sent, live.header = now, h
+            Comm.Send("LIVE", { id = game.id, h = Cut(h) }, nil)
+        end
+        if next(live.watchers) then
+            local h2, l1, l2 = Live.Describe(game)
+            local text = h2 .. "\n" .. l1 .. "\n" .. l2
+            if text ~= live.last then
+                live.last = text
+                for name in pairs(live.watchers) do SendSpec(game, name) end
+            end
+        end
+    end
+    local changed = false
+    for id, g in pairs(Live.games) do
+        if (g.ended and now - g.endedAt > Live.ENDED_SHOW) or (not g.ended and now - g.seen > Live.EXPIRE) then
+            if Live.watching == id and not g.ended then g.ended, g.endedAt = "Lost touch with this game", now
+            elseif Live.watching ~= id or now - (g.endedAt or now) > Live.ENDED_SHOW then
+                Live.games[id] = nil
+                if Live.watching == id then Live.watching = nil end
+            end
+            changed = true
+        end
+    end
+    if changed and ns.UI then ns.UI.Refresh() end
+    C_Timer.After(1, Tick)
+end
+C_Timer.After(1, Tick)
+
+--- Games other people are playing, newest first.
+function Live.List()
+    local list = {}
+    for _, g in pairs(Live.games) do list[#list + 1] = g end
+    -- games still running first, newest first
+    table.sort(list, function(x, y)
+        if (x.ended == nil) ~= (y.ended == nil) then return x.ended == nil end
+        return (x.first or 0) > (y.first or 0)
+    end)
+    return list
+end
+
+function Live.Watch(id)
+    local g = Live.games[id]
+    if not g then return false end
+    if Live.watching and Live.watching ~= id then Live.Unwatch() end
+    Live.watching = id
+    Comm.Send("WATCH", { id = id }, g.host)
+    if ns.UI then ns.UI.Refresh() end
+    return true
+end
+
+function Live.Unwatch()
+    local id = Live.watching
+    if not id then return end
+    Live.watching = nil
+    local g = Live.games[id]
+    if g and not g.ended then Comm.Send("UNWATCH", { id = id }, g.host) end
+    if ns.UI then ns.UI.Refresh() end
+end
+
+Comm.On("LIVE", function(f, sender)
+    if not f.id or not ns.Guild.Allowed(sender) then return end
+    local g = Live.games[f.id]
+    if not g then
+        g = { id = f.id, host = sender, first = GetTime() }
+        Live.games[f.id] = g
+    end
+    if not ns.SameName(g.host, sender) then return end
+    g.h, g.seen = f.h, GetTime()
+    -- we were watching and the host forgot us (e.g. they reloaded): ask again
+    if Live.watching == f.id and not g.l1 then Comm.Send("WATCH", { id = f.id }, sender) end
+    if ns.UI then ns.UI.Refresh() end
+end)
+
+Comm.On("LIVE_END", function(f, sender)
+    local g = Live.games[f.id or ""]
+    if not g or not ns.SameName(g.host, sender) then return end
+    g.ended, g.endedAt = f.r or "Finished", GetTime()
+    if ns.UI then ns.UI.Refresh() end
+end)
+
+Comm.On("WATCH", function(f, sender)
+    local game = ns.Games.Get(f.id)
+    if not game or not game.live or not ns.Guild.Allowed(sender) then return end
+    if not game.live.watchers[sender] then
+        if Live.WatcherCount(game) >= Live.MAX_WATCHERS then return end
+        game.live.watchers[sender] = true
+        ns.Log("%s is watching your game.", Name(sender))
+    end
+    SendSpec(game, sender)
+    if ns.UI then ns.UI.Refresh() end
+end)
+
+Comm.On("UNWATCH", function(f, sender)
+    local game = ns.Games.Get(f.id)
+    if game and game.live then
+        game.live.watchers[sender] = nil
+        if ns.UI then ns.UI.Refresh() end
+    end
+end)
+
+Comm.On("SPEC", function(f, sender)
+    local g = Live.games[f.id or ""]
+    if not g or not ns.SameName(g.host, sender) then return end
+    g.h, g.l1, g.l2, g.seen = f.h or g.h, f.a or "", f.b or "", GetTime()
+    if ns.UI then ns.UI.Refresh() end
+end)
