@@ -51,6 +51,13 @@ function events.GUILD_ROSTER_UPDATE()
     ns.Guild.Rebuild()
 end
 
+-- the wealth chart: our gold or level changed
+function events.PLAYER_MONEY(...)
+    ns.Wealth.Changed()
+    return ns.Payments.PLAYER_MONEY(...) -- (this table wins over Payments' own handler)
+end
+function events.PLAYER_LEVEL_UP() ns.Wealth.Changed() end
+
 -- the mailbox, for the Ledger tab's Pay debts button
 for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED" }) do
     events[e] = function(...) return ns.MailPay[e](...) end

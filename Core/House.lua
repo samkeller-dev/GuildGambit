@@ -65,6 +65,7 @@ end
 function House.SayHello()
     Hello(nil, false)
     if ns.Board then ns.Board.Send(nil) end
+    if ns.Wealth then ns.Wealth.Send(nil, true) end
 end
 
 --- Asks one player for their version (they answer with a HELLO reply).
@@ -141,6 +142,7 @@ Comm.On("HELLO", function(f, sender)
         ns.Board.SendSeason(sender) -- first, so their board resets before our stats arrive
         ns.Board.Send(sender)
     end
+    if ns.Wealth then ns.Wealth.Send(sender) end
 end)
 
 -- Shared messages handled here so every module is loaded first.

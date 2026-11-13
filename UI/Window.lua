@@ -957,6 +957,12 @@ local function Build()
         frame.logLines[i] = line
     end
 
+    -- the coin tab on the side: pops out the guild wealth window
+    if ns.WealthUI then
+        local ok, err = pcall(ns.WealthUI.Attach, frame)
+        if not ok then ns.Print("|cffff4040the wealth tab failed to build: %s|r", tostring(err)) end
+    end
+
     frame.ready = true
     SelectTab(panels[ns.db.window.tab] and ns.db.window.tab or "play")
     return frame

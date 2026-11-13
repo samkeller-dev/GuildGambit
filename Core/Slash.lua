@@ -17,7 +17,7 @@ local HELP = {
     "/gg flip <wager> <player|practice> [alliance|horde] - coinflip: heads Alliance, tails Horde",
     "/gg roll | hit | stand | double | cancel - act in your game",
     "/gg accept | decline - answer a challenge",
-    "/gg ledger - who owes whom | /gg board - leaderboard",
+    "/gg ledger - who owes whom | /gg board - leaderboard | /gg wealth [player] - guild wealth chart",
     "/gg paid <player> <amount> | received <player> <amount> - record a payment (they confirm it)",
     "/gg settle <player> - clear everything with a player (they confirm it)",
     "/gg art - check the dragon frames | art <kind> cx cy d - adjust",
@@ -74,6 +74,10 @@ commands.kodo = function(gold, ...)
     ns.Kodo.Challenge(#words > 0 and table.concat(words, " ") or nil, gold)
 end
 commands.arcade = function() ns.UI.SetShown(true) ns.UI.SelectTab("arcade") end
+commands.wealth = function(...)
+    local name = table.concat({ ... }, " ")
+    if name ~= "" then ns.WealthUI.ShowPlayer(name) else ns.WealthUI.Toggle() end
+end
 
 commands.bj = function(...)
     local gold, house = NumberThenName(...)

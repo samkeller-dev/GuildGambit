@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: GuildGambit
-## Notes: Deathroll (1v1 or group), blackjack, slots and coinflip for gold between guildies. Every result is a server /roll.
+## Notes: Deathroll (1v1 or group), blackjack, coinflip and Kodo Crossing for gold between guildies, plus a guild wealth chart.
 ## Author: You
-## Version: 1.8.1
+## Version: 1.9.0
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: GuildGambitDB
@@ -20,6 +20,7 @@ Core\Ledger.lua
 Core\Board.lua
 Core\Payments.lua
 Core\Games.lua
+Core\Wealth.lua
 Rules\Slots.lua
 Rules\Blackjack.lua
 Games\Deathroll.lua
@@ -31,5 +32,6 @@ UI\Art.lua
 UI\Cards.lua
 UI\Window.lua
 UI\Arcade.lua
+UI\Wealth.lua
 Core\Events.lua
 Core\Slash.lua
