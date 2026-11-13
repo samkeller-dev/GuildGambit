@@ -736,6 +736,7 @@ function Engine:Replay(dt)
     -- if we fall far behind (e.g. the window was closed), catch up at once
     if limit - g.time > 4 then dt = limit - g.time - 1 end
     local target = math.min(g.time + dt, limit)
+    local guard = 0 -- never let a replay hold up the game: at worst it pauses for a frame
     while g.state == "play" do
         local ev = g.queue[1]
         local stop = ev and math.min(ev.t, target) or target
@@ -750,7 +751,12 @@ function Engine:Replay(dt)
             if g.started then g.cam = math.min(g.r + 0.5, g.cam + (0.32 + math.min(0.55, g.score / 220)) * jump) end
             g.time = g.time + jump
         end
-        while g.time < stop - 1e-6 do self:Step(math.min(0.05, stop - g.time)) end
+        while g.time < stop - 1e-6 do
+            local before = g.time
+            self:Step(math.min(0.05, stop - g.time))
+            guard = guard + 1
+            if g.time <= before or guard > 2000 then return end
+        end
         if not ev or ev.t > target then break end
         table.remove(g.queue, 1)
         if ev.k == "h" then
@@ -826,7 +832,10 @@ function Arcade.Input(action)
     local g = main.g
     if g.state == "over" then
         -- a duel run can't be re-run; once it's settled, Space starts a practice run
-        if (action == "start" or action == "click") and (not g.duel or g.duelResult) then main:New() end
+        if (action == "start" or action == "click") and (not g.duel or g.duelResult) then
+            main:New()
+            Arcade.HideOpponent()
+        end
         return
     end
     if action == "pause" then
@@ -867,8 +876,18 @@ local function RefreshChooser()
     local g = main.g
     local busy = g and (g.state == "play" or g.state == "paused")
     if busy then panel.charBtn:Disable() else panel.charBtn:Enable() end
-    panel.score:SetText(("Score  |cffffffff%d|r      Best  |cffffd100%d|r      Coins  |cffffd100%d|r"):format(
-        g and g.score or 0, Arcade.Best(), db.arcadeCoins))
+    local duel = g and g.duel
+    if duel then
+        -- a duel: make it obvious who you're up against, and the score between you
+        local mine = ns.IsMe(duel.a) and "a" or "b"
+        local theirs = mine == "a" and "b" or "a"
+        panel.score:SetText(("|cffff4040DUEL|r vs |cffffd100%s|r  -  %s      You |cffffffff%d|r : |cffffffff%d|r Them"):format(
+            ns.Short(duel.opponent), ns.Stake(duel.bet or 0), duel.scores and duel.scores[mine] or g.score,
+            duel.scores and duel.scores[theirs] or 0))
+    else
+        panel.score:SetText(("Score  |cffffffff%d|r      Best  |cffffd100%d|r      Coins  |cffffd100%d|r"):format(
+            g and g.score or 0, Arcade.Best(), db.arcadeCoins))
+    end
 end
 
 function Arcade.NextChar()
@@ -976,9 +995,81 @@ function Arcade.Build(p)
     main:New()
 end
 
+---------------------------------------------------------------------------
+-- In a duel: your opponent's run, live, in a panel beside the window (replayed from their hops
+-- like a spectator's view)
+---------------------------------------------------------------------------
+local OPP_SCALE = 0.5
+local opp
+
+local function BuildOpponent()
+    if opp then return opp end
+    local parent = ns.UI and ns.UI.Frame and ns.UI.Frame() or UIParent
+    local f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    f:SetSize(COLS * TILE * OPP_SCALE + 20, VIEW_ROWS * TILE * OPP_SCALE + 64)
+    f:SetPoint("TOPLEFT", parent, "TOPRIGHT", -6, -40)
+    f:SetBackdrop({ bgFile = Art.GAME.dialogBg, edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 32, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    f:SetBackdropBorderColor(0.9, 0.72, 0.3, 1)
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.title:SetPoint("TOP", 0, -10)
+    f.score = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.score:SetPoint("TOP", f.title, "BOTTOM", 0, -4)
+    local holder = CreateFrame("Frame", nil, f)
+    holder:SetSize(COLS * TILE * OPP_SCALE, VIEW_ROWS * TILE * OPP_SCALE)
+    holder:SetPoint("BOTTOM", 0, 10)
+    local e = Arcade.NewEngine({ spectator = true })
+    local canvas = e:BuildCanvas(holder)
+    canvas:SetScale(OPP_SCALE)
+    canvas:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
+    e:New()
+    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", 2, 2)
+    close:SetScript("OnClick", function() f:Hide() end)
+    f:SetScript("OnUpdate", function()
+        local dt = GetTime() - (f.last or GetTime())
+        f.last = GetTime()
+        if e.g and e.g.queue then e:Replay(dt) end
+        e:Render()
+        local game = f.game
+        if game then
+            local theirs = ns.IsMe(game.a) and "b" or "a"
+            local done = game.finishedRun and game.finishedRun[theirs]
+            f.score:SetText(("Score |cffffffff%d|r%s"):format(game.scores and game.scores[theirs] or 0,
+                done and "  |cffffd100final|r" or ""))
+        end
+    end)
+    f:Hide()
+    opp = { frame = f, engine = e }
+    return opp
+end
+
+--- Shows the opponent panel for a duel (their run arrives via FollowOpponent / FeedOpponent).
+function Arcade.ShowOpponent(game)
+    local o = BuildOpponent()
+    o.frame.game = game
+    o.frame.title:SetText(("|cffffd100%s|r's run"):format(ns.Short(game.opponent)))
+    o.engine:New()
+    o.frame:Show()
+end
+
+function Arcade.FollowOpponent(seed, char, snap)
+    local o = BuildOpponent()
+    o.engine:Follow(seed, char or "gnome", snap)
+end
+
+function Arcade.FeedOpponent(events, knownTime)
+    if opp then opp.engine:Feed(events, knownTime) end
+end
+
+function Arcade.HideOpponent()
+    if opp then opp.frame:Hide() end
+end
+
 -- for the mock-client tests
 function Arcade._Step(dt) if main.g then main:Step(dt) main:Render() end end
 function Arcade._State() return main.g end
 function Arcade._Canvas() return main.canvas end
 function Arcade._Row(r) return main.g and Row(main.g, r) end
 function Arcade._PlaceMovers(row, t) PlaceMovers(row, t) end
+function Arcade._Opponent() return opp end

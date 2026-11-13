@@ -170,7 +170,7 @@ ns.Live = Live
 
 Live.HEARTBEAT = 20     -- seconds between LIVE repeats
 Live.EXPIRE = 70        -- a game we haven't heard about for this long is gone
-Live.ENDED_SHOW = 60    -- a finished game stays in the list this long, showing the result
+Live.ENDED_SHOW = 15    -- the game you were watching shows its result this long, then clears
 Live.MAX_WATCHERS = 15
 Live.LINE_MAX = 120
 Live.games = {}         -- id -> { id, host, h, a, b, seen, ended, endedAt } (other people's games)
@@ -297,11 +297,10 @@ function Live.End(game)
     local live = game.live
     if not live then return end
     game.live = nil
+    -- the final table first, then the result
+    if next(live.watchers) then Comm.Send("STATE", Live.State(game), nil, { key = "STATE" .. game.id }) end
+    for name, w in pairs(live.watchers) do if w == "text" then SendSpec(game, name) end end
     Comm.Send("LIVE_END", { id = game.id, r = Cut(Live.ResultText(game)) }, nil)
-    for name in pairs(live.watchers) do -- the final table
-        SendSpec(game, name)
-        Live.SendState(game, name)
-    end
 end
 
 function Live.WatcherCount(game)
@@ -326,25 +325,51 @@ local function Tick()
             Comm.Send("LIVE", { id = game.id, h = Cut(h) }, nil)
         end
         if next(live.watchers) then
+            -- text lines, only for watchers on an older GuildGambit
             local h2, l1, l2 = Live.Describe(game)
             local text = h2 .. "\n" .. l1 .. "\n" .. l2
             if text ~= live.last then
                 live.last = text
-                for name in pairs(live.watchers) do SendSpec(game, name) end
+                for name, w in pairs(live.watchers) do
+                    if w == "text" then SendSpec(game, name) end
+                end
             end
-            -- and the table itself, for 1.7.0+ watchers
+            -- the table itself: ONE broadcast for every watcher (not one per watcher), at most a
+            -- couple a second, and a newer one replaces any still waiting to go out
             local state = Comm.Encode("STATE", Live.State(game))
-            if state ~= live.lastState then
-                live.lastState = state
-                for name in pairs(live.watchers) do Live.SendState(game, name) end
+            if state ~= live.lastState and now - (live.stateAt or 0) >= Live.STATE_EVERY then
+                live.lastState, live.stateAt = state, now
+                Comm.Send("STATE", Live.State(game), nil, { key = "STATE" .. game.id })
+            end
+        end
+    end
+    -- watching, but the table (or a duel run) hasn't arrived: a message must have been lost
+    local w = Live.watching and Live.games[Live.watching]
+    if w and not w.ended and now - (w.askedAt or 0) >= Live.REASK then
+        local m = w.mirror
+        if not m then
+            w.askedAt = now
+            Comm.Send("WATCH", { id = w.id, v = 2 }, w.host)
+        elseif m.kind == "kodo" then
+            for _, side in ipairs({ "a", "b" }) do
+                local run = w.runs and w.runs[side]
+                if not run then
+                    w.askedAt = now
+                    Comm.Send("WATCH", { id = w.id, v = 2 }, side == "a" and m.a or m.b)
+                end
             end
         end
     end
     local changed = false
     for id, g in pairs(Live.games) do
-        if (g.ended and now - g.endedAt > Live.ENDED_SHOW) or (not g.ended and now - g.seen > Live.EXPIRE) then
+        -- a finished game not being watched goes at once; the one being watched after a moment;
+        -- one we haven't heard about for a while is gone too (its end message may have been lost)
+        local finishedState = g.mirror and g.mirror.finished
+        if finishedState and not g.ended then g.ended, g.endedAt = "Finished", now end
+        if (g.ended and (Live.watching ~= id or now - g.endedAt > Live.ENDED_SHOW))
+            or (not g.ended and now - g.seen > Live.EXPIRE) then
             if Live.watching == id and not g.ended then g.ended, g.endedAt = "Lost touch with this game", now
-            elseif Live.watching ~= id or now - (g.endedAt or now) > Live.ENDED_SHOW then
+            else
                 Live.games[id] = nil
                 if Live.watching == id then Live.watching = nil end
             end
@@ -355,6 +380,8 @@ local function Tick()
     C_Timer.After(Live.TICK, Tick)
 end
 Live.TICK = 0.25 -- quick, so watchers see each roll almost as soon as the players do
+Live.STATE_EVERY = 0.4 -- at most this often (a newer state replaces one still waiting)
+Live.REASK = 5 -- no table or run from a player we're watching after this long: ask again
 C_Timer.After(1, Tick)
 
 --- Games other people are playing, newest first.
@@ -374,8 +401,8 @@ function Live.Watch(id)
     if not g then return false end
     if Live.watching and Live.watching ~= id then Live.Unwatch() end
     Live.watching = id
-    g.runs, g.askedB = nil, nil
-    Comm.Send("WATCH", { id = id }, g.host)
+    g.runs, g.askedB, g.askedAt = nil, nil, GetTime()
+    Comm.Send("WATCH", { id = id, v = 2 }, g.host)
     if ns.UI then ns.UI.Refresh() end
     return true
 end
@@ -402,14 +429,19 @@ Comm.On("LIVE", function(f, sender)
     if not ns.SameName(g.host, sender) then return end
     g.h, g.seen = f.h, GetTime()
     -- we were watching and the host forgot us (e.g. they reloaded): ask again
-    if Live.watching == f.id and not g.l1 then Comm.Send("WATCH", { id = f.id }, sender) end
+    if Live.watching == f.id and not g.mirror and not g.l1 then Comm.Send("WATCH", { id = f.id, v = 2 }, sender) end
     if ns.UI then ns.UI.Refresh() end
 end)
 
 Comm.On("LIVE_END", function(f, sender)
     local g = Live.games[f.id or ""]
     if not g or not ns.SameName(g.host, sender) then return end
-    g.ended, g.endedAt = f.r or "Finished", GetTime()
+    if Live.watching == f.id then
+        -- the game we're watching: keep its final table up for a moment, with the result
+        g.ended, g.endedAt = f.r or "Finished", GetTime()
+    else
+        Live.games[f.id] = nil -- finished games leave the list straight away
+    end
     if ns.UI then ns.UI.Refresh() end
 end)
 
@@ -418,13 +450,16 @@ Comm.On("WATCH", function(f, sender)
     if not game or not ns.Guild.Allowed(sender) then return end
     -- a Kodo Crossing duel: both players stream their own run to the watcher
     if game.kind == "kodo" and ns.Kodo then ns.Kodo.AddRunWatcher(game, sender) end
-    if not game.live then return end
+    -- (my duel opponent only wants my run, not the spectator table)
+    if not game.live or ns.SameName(game.opponent, sender) then return end
+    local kind = f.v and "table" or "text" -- 1.7.1+ watchers say v=2 and want the table
     if not game.live.watchers[sender] then
         if Live.WatcherCount(game) >= Live.MAX_WATCHERS then return end
-        game.live.watchers[sender] = true
         ns.Log("%s is watching your game.", Name(sender))
     end
-    SendSpec(game, sender)
+    game.live.watchers[sender] = kind
+    -- straight to them, so they see the table right away
+    if kind == "text" then SendSpec(game, sender) end
     Live.SendState(game, sender)
     if ns.UI then ns.UI.Refresh() end
 end)
@@ -605,14 +640,14 @@ end
 
 Comm.On("STATE", function(f, sender)
     local g = Live.games[f.id or ""]
-    if not g or not ns.SameName(g.host, sender) then return end
+    if not g or Live.watching ~= f.id or not ns.SameName(g.host, sender) then return end
     g.seen = GetTime()
     local ok, m = pcall(Live.Mirror, g, f)
     if ok and m then
         g.mirror = m
         if m.kind == "kodo" and Live.watching == g.id and not g.askedB and m.b then
             g.askedB = m.b
-            Comm.Send("WATCH", { id = g.id }, m.b)
+            Comm.Send("WATCH", { id = g.id, v = 2 }, m.b)
         end
         if ns.UI then ns.UI.Refresh() end
     end
@@ -625,18 +660,51 @@ end
 -- A duel run, for the Live tab's replay: RUNS = where the run is now (when we start watching),
 -- RUN = the hops since. p = "a" or "b", the player's side.
 Comm.On("RUNS", function(f, sender)
+    local own = ns.Kodo and ns.Kodo.OpponentRun and ns.Kodo.OpponentRun(f, sender)
+    if own then return end -- my duel opponent's run, for the Arcade tab's side view
     local g = Live.games[f.id or ""]
     if not g or Live.watching ~= f.id or (f.p ~= "a" and f.p ~= "b") then return end
     g.runs = g.runs or {}
-    g.runs[f.p] = { seed = tonumber(f.z), char = f.c, from = sender, snap = {
+    g.runs[f.p] = { seed = tonumber(f.z), char = f.c, from = sender, next = (tonumber(f.n) or 0) + 1, snap = {
         t = tonumber(f.t) or 0, x = tonumber(f.x) or 4, r = tonumber(f.r) or 0, cam = tonumber(f.m),
         score = tonumber(f.sc) or 0, over = (f.o and f.o ~= "") and f.o or nil } }
     if ns.UI and ns.UI.FollowRun then ns.UI.FollowRun(f.p, g.runs[f.p]) end
 end)
 
+--- Takes a RUN batch for a run we follow: only hops we haven't had, in order. A gap means a
+--- batch was lost: ask the player for the missing hops (at most every couple of seconds).
+function Live.TakeRun(run, f, sender, feed)
+    local first, total = tonumber(f.i) or 1, tonumber(f.n) or 0
+    local events = ns.Kodo.DecodeEvents(f.e)
+    if first > run.next then
+        local now = GetTime()
+        if now - (run.askedAt or 0) > 2 then
+            run.askedAt = now
+            Comm.Send("RUNREQ", { id = f.id, p = f.p, i = run.next }, sender)
+        end
+        return
+    end
+    local fresh = {}
+    for n, ev in ipairs(events) do
+        if first + n - 1 >= run.next then fresh[#fresh + 1] = ev end
+    end
+    run.next = math.max(run.next, first + #events)
+    feed(fresh, tonumber(f.k))
+    if total >= run.next then -- they've made more hops than we've got: ask for the rest
+        local now = GetTime()
+        if now - (run.askedAt or 0) > 2 then
+            run.askedAt = now
+            Comm.Send("RUNREQ", { id = f.id, p = f.p, i = run.next }, sender)
+        end
+    end
+end
+
 Comm.On("RUN", function(f, sender)
+    if ns.Kodo and ns.Kodo.OpponentRunBatch and ns.Kodo.OpponentRunBatch(f, sender) then return end
     local g = Live.games[f.id or ""]
     local run = g and g.runs and g.runs[f.p or ""]
     if not run or Live.watching ~= f.id or not ns.SameName(run.from, sender) then return end
-    if ns.UI and ns.UI.FeedRun then ns.UI.FeedRun(f.p, ns.Kodo.DecodeEvents(f.e), tonumber(f.k)) end
+    Live.TakeRun(run, f, sender, function(events, k)
+        if ns.UI and ns.UI.FeedRun then ns.UI.FeedRun(f.p, events, k) end
+    end)
 end)

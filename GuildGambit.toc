@@ -2,7 +2,7 @@
 ## Title: GuildGambit
 ## Notes: Deathroll (1v1 or group), blackjack, slots and coinflip for gold between guildies. Every result is a server /roll.
 ## Author: You
-## Version: 1.7.0
+## Version: 1.8.0
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: GuildGambitDB
