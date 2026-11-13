@@ -5,6 +5,14 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 1.7.0 - 2026-11-13
+
+- **Kodo Crossing** - a new lane-crossing arcade game in its own **Arcade** tab: hop across roads full of kodos and raptors, stampede lanes, and rivers with drifting logs and lily pads. Collect coins to unlock characters (gnome, orc, night elf, tauren, forsaken). Every 40 rows you enter a new zone (Elwynn, the Barrens, Winterspring). Arrow keys / WASD, P to pause.
+- **Kodo Crossing duels replace Slots:** challenge a guildie with a wager; you each get one run on exactly the same lanes and the higher score wins. Results go to the ledger, leaderboard, guild chat and Live tab like every other game. (Slots is retired; older addons that offer it get a polite decline.)
+- **Live tab shows the real game:** spectators now see the same table as the players - the big deathroll number, the cards (hole cards stay hidden until the showdown), the coin, the group roster - and a live split-screen replay of both runs in a Kodo Crossing duel.
+- **Leaderboard:** a fire icon for 4+ wins in a row and a curse icon for 4+ losses in a row; "biggest drop to 1" (the largest range someone has rolled a 1 from); and a new **Kodo Crossing** high-score sub-tab.
+- Coinflip waits 3 seconds before the flip, so there's a moment of suspense (and spectators can tune in).
+
 ## 1.6.0 - 2026-11-13
 
 - **Live tab:** see every game being played in the guild right now, all modes, and watch one live. Blackjack hole cards stay hidden until the showdown. Players see how many people are watching.

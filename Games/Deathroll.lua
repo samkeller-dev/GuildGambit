@@ -59,6 +59,7 @@ function OnRoll(game, roller, v, verified)
         -- only the player who rolled the 1 hears the death cry; the winner gets the fanfare
         if iLost then
             game.deathCry = true
+            game.drop = game.max -- for the leaderboard's "biggest drop to 1"
             ns.Sound("death")
         end
         Games.Finish(game, iLost and -game.stake or game.stake,
@@ -199,7 +200,7 @@ ns.Coinflip = CF
 CF.INVITE_TIMEOUT = 60
 CF.ACCEPT_RETRY = 5
 CF.ACCEPT_RETRIES = 6
-CF.FLIP_DELAY = 1.0
+CF.FLIP_DELAY = 3.0 -- a moment of suspense (and time for spectators to tune in)
 CF.PRACTICE = "Practice"
 CF.SIDES = {
     A = { faction = "Alliance", face = "Heads", roll = 1, icon = "Interface\\Icons\\INV_BannerPVP_02" },
@@ -525,7 +526,7 @@ local function Finish(game, winner)
         net, outcome = game.bet * (#game.players - 1), 1
     else
         ns.Ledger.Record({ id = game.id, game = "groupdr", opponent = winner, net = -game.bet,
-            result = -1, wager = game.bet, verified = verified })
+            result = -1, wager = game.bet, verified = verified, drop = game.drop })
         net, outcome = -game.bet, -1
     end
     game.finished, game.net, game.outcome = true, net, outcome
@@ -563,6 +564,7 @@ local function KnockOut(game, who, why, reset)
         game.iAmOut = true
         if reset then
             game.deathCry = true
+            game.drop = game.lastRoll and game.lastRoll.max or nil -- the range I rolled a 1 from
             ns.Sound("death")
         end
         ns.UI.SetRollPrompt(nil)

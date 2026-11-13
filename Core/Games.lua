@@ -53,6 +53,7 @@ end
 
 local WON_TEXT = {
     deathroll = "won a deathroll", blackjack = "won at blackjack", slots = "won at slots", coinflip = "won a coinflip",
+    kodo = "won at Kodo Crossing",
 }
 
 --- Records the result for this client and ends the game.
@@ -65,6 +66,7 @@ function Games.Finish(game, net, summary, outcome)
     ns.Ledger.Record({
         id = game.id, game = game.kind, opponent = game.opponent, net = net, result = outcome,
         wager = game.wagered or game.bet or game.stake or 0,
+        drop = game.drop, -- deathroll: the range I rolled a 1 from
         verified = game.verified ~= false, practice = practice,
     })
     local tag = practice and " |cff888888(practice)|r" or
@@ -100,6 +102,7 @@ end
 function Games.Cancel(game, why, silent)
     if not game then return false end
     if game.kind == "groupdr" then return ns.GroupDeathroll.Leave(game, why) end
+    if game.kind == "kodo" then return ns.Kodo.Leave(game, why, silent) end
     if not silent and not game.practice then
         ns.Comm.Send("CANCEL", { id = game.id }, game.opponent)
     end
