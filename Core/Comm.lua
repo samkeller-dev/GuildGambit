@@ -44,7 +44,8 @@ end
 -- one proven prefix again. We still listen on the old one, for players on 1.8.0. Spectator
 -- messages wait behind game messages in the queue below, so they can't crowd games out.
 Comm.LIVE_PREFIX = "GGLIVE"
-local LIVE_TYPES = { LIVE = true, LIVE_END = true, SPEC = true, STATE = true, RUNS = true, RUN = true, RUNREQ = true }
+local LIVE_TYPES = { LIVE = true, LIVE_END = true, SPEC = true, STATE = true, RUNS = true, RUN = true, RUNREQ = true,
+    WEALTH = true, WREQ = true } -- (and the wealth chart: never ahead of a game)
 
 Comm.registered = {} -- prefix -> WoW's answer when we registered it (for /gg live)
 
