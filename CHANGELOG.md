@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 1.9.1 - 2026-11-14
+
+- **Leaderboard scrolls:** with more than 8 players, scroll the list below the podium with the mouse wheel or the little arrows (a counter shows e.g. "4-8 of 13"). The Kodo Crossing high scores scroll the same way past the top 10.
+
 ## 1.9.0 - 2026-11-14
 
 - **Guild Wealth:** a new coin tab on the side of the window pops out a donut chart of the guild's gold - one slice per character, sized by the gold in their bags. Click a slice (or a name in the list below it) for that player's card: wallet, share of the guild's gold, change over the last 7 days and most ever held; honorable and dishonorable kills; and their GuildGambit record - net, win rate, wagered, current and longest streak, biggest win and biggest loss (with dates), biggest drop to 1, nemesis (who has won the most gold off them), victim (who they've won the most from), Kodo Crossing best, and what you owe each other. Each character shares its own numbers; opening the chart asks everyone online for fresh ones. Also `/gg wealth [player]`.

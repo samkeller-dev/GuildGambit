@@ -2,7 +2,7 @@
 ## Title: GuildGambit
 ## Notes: Deathroll (1v1 or group), blackjack, coinflip and Kodo Crossing for gold between guildies, plus a guild wealth chart.
 ## Author: You
-## Version: 1.9.0
+## Version: 1.9.1
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## SavedVariables: GuildGambitDB
