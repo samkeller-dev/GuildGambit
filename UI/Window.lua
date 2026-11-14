@@ -717,6 +717,54 @@ local PODIUM = {
 local PODIUM_FLOOR = -214  -- y of the podium's bottom edge
 local ROWS, ROW_H, SMALL = 5, 26, 22
 
+-- Scrolling a list of rows: the mouse wheel over `area`, or the little arrows.
+-- owner.offset = how many entries are scrolled past.
+local SCROLL_TEX = "Interface\\Buttons\\UI-ScrollBar-Scroll%sButton-%s"
+local function ScrollArrow(parent, dir, onClick)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(20, 20)
+    b:SetNormalTexture(SCROLL_TEX:format(dir, "Up"))
+    b:SetPushedTexture(SCROLL_TEX:format(dir, "Down"))
+    b:SetDisabledTexture(SCROLL_TEX:format(dir, "Disabled"))
+    b:SetHighlightTexture(SCROLL_TEX:format(dir, "Highlight"), "ADD")
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+local function AddScroll(owner, area)
+    owner.offset = 0
+    local function Move(by)
+        owner.offset = owner.offset + by
+        UI.Refresh()
+    end
+    area:EnableMouseWheel(true)
+    area:SetScript("OnMouseWheel", function(_, delta) Move(-delta) end)
+    owner.scrollUp = ScrollArrow(owner, "Up", function() Move(-1) end)
+    owner.scrollDown = ScrollArrow(owner, "Down", function() Move(1) end)
+    owner.scrollText = Label(owner, "", "GameFontDisableSmall")
+    owner.scrollText:SetPoint("RIGHT", owner.scrollDown, "LEFT", -4, 0)
+end
+
+--- Keeps owner.offset in range for `total` entries shown `visible` at a time (skipping
+--- `first` entries shown elsewhere, e.g. the podium); updates the arrows. Returns the offset.
+local function ClampScroll(owner, total, visible, first)
+    first = first or 0
+    local listed = math.max(0, total - first)
+    local max = math.max(0, listed - visible)
+    owner.offset = math.min(math.max(owner.offset or 0, 0), max)
+    local scrolls = max > 0
+    owner.scrollUp:SetShown(scrolls)
+    owner.scrollDown:SetShown(scrolls)
+    owner.scrollText:SetShown(scrolls)
+    if scrolls then
+        owner.scrollUp:SetEnabled(owner.offset > 0)
+        owner.scrollDown:SetEnabled(owner.offset < max)
+        owner.scrollText:SetText(("%d-%d of %d"):format(first + owner.offset + 1,
+            first + math.min(owner.offset + visible, listed), total))
+    end
+    return owner.offset
+end
+
 -- Leaderboard sub-tabs: Gold (the podium) and Kodo Crossing (high scores).
 local HS_ROWS, HS_ROW_H = 10, 32
 
@@ -742,10 +790,13 @@ local function BuildHighScores(p)
     hs.empty = Label(hs, "|cff888888No runs yet. Play in the Arcade tab!|r", "GameFontHighlight")
     hs.empty:SetPoint("TOP", 0, -40)
     hs.rows = {}
+    hs.area = CreateFrame("Frame", nil, hs)
+    hs.area:SetPoint("TOP", 0, -26)
+    hs.area:SetSize(W - 40, HS_ROWS * HS_ROW_H)
     for i = 1, HS_ROWS do
-        local r = CreateFrame("Frame", nil, hs)
+        local r = CreateFrame("Frame", nil, hs.area)
         r:SetSize(W - 60, HS_ROW_H)
-        r:SetPoint("TOP", 0, -26 - (i - 1) * HS_ROW_H)
+        r:SetPoint("TOP", 0, -(i - 1) * HS_ROW_H)
         r.rank = Label(r, i .. ".", "GameFontNormalLarge")
         r.rank:SetPoint("LEFT", 10, 0)
         r.icon = r:CreateTexture(nil, "ARTWORK")
@@ -757,6 +808,9 @@ local function BuildHighScores(p)
         r.score:SetPoint("RIGHT", -10, 0)
         hs.rows[i] = r
     end
+    AddScroll(hs, hs.area)
+    hs.scrollUp:SetPoint("TOPRIGHT", 0, 2)
+    hs.scrollDown:SetPoint("BOTTOMRIGHT", 0, 0)
     hs.me = Label(hs, "", "GameFontNormal")
     hs.me:SetPoint("BOTTOMLEFT", 0, 0)
     hs:Hide()
@@ -767,14 +821,17 @@ local function RefreshHighScores(p)
     local list = ns.Board.HighScores()
     hs.empty:SetShown(#list == 0)
     local medal = { "ffd100", "c0c8d8", "d08048" }
+    local offset = ClampScroll(hs, #list, HS_ROWS)
     for i, r in ipairs(hs.rows) do
-        local e = list[i]
+        local n = offset + i
+        local e = list[n]
         r:SetShown(e ~= nil)
         if e then
+            r.rank:SetText(n .. ".")
             ns.Arcade.SetSprite(r.icon, e.char or "gnome")
             local name = ns.IsMe(e.name) and ("|cffffd100" .. ns.Short(e.name) .. "|r") or ns.Short(e.name)
             r.name:SetText(name)
-            r.score:SetText(("|cff%s%d|r"):format(medal[i] or "ffffff", e.score))
+            r.score:SetText(("|cff%s%d|r"):format(medal[n] or "ffffff", e.score))
         end
     end
     hs.me:SetText(("Your best: |cffffd100%d|r"):format(ns.Arcade.Best()))
@@ -813,10 +870,13 @@ local function BuildBoard(p)
     end
     p.rowHeads = head
     p.rows = {}
+    p.rowArea = CreateFrame("Frame", nil, p)
+    p.rowArea:SetPoint("TOPLEFT", 0, PODIUM_FLOOR - 52)
+    p.rowArea:SetSize(W - 40, ROWS * ROW_H)
     for i = 1, ROWS do
-        local r = CreateFrame("Frame", nil, p)
+        local r = CreateFrame("Frame", nil, p.rowArea)
         r:SetSize(W - 40, ROW_H)
-        r:SetPoint("TOPLEFT", 0, PODIUM_FLOOR - 52 - (i - 1) * ROW_H)
+        r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
         r.rank = Label(r, tostring(i + 3), "GameFontNormal")
         r.rank:SetPoint("LEFT", 6, 0)
         r.portrait = Art.CreatePortrait(r, SMALL)
@@ -831,6 +891,10 @@ local function BuildBoard(p)
         r.wag:SetPoint("LEFT", 345, 0)
         p.rows[i] = r
     end
+    -- more than 8 players: scroll the rows (mouse wheel, or the arrows)
+    AddScroll(p, p.rowArea)
+    p.scrollUp:SetPoint("TOPRIGHT", 0, PODIUM_FLOOR - 32)
+    p.scrollDown:SetPoint("TOPRIGHT", 0, PODIUM_FLOOR - 52 - ROWS * ROW_H - 2)
     p.me = Label(p, "", "GameFontNormal")
     p.me:SetPoint("BOTTOMLEFT", 0, 0)
     p.me:SetWidth(W - 40)
@@ -1234,6 +1298,7 @@ local function RefreshBoard(p)
     if kodo then
         for _, r in ipairs(p.rows) do r:Hide() end
         for _, l in ipairs(p.rowHeads) do l:Hide() end
+        p.scrollUp:Hide() p.scrollDown:Hide() p.scrollText:Hide()
         return RefreshHighScores(p)
     end
     local ranked = ns.Board.Ranked()
@@ -1251,10 +1316,13 @@ local function RefreshBoard(p)
             s.wl:SetText("")
         end
     end
+    local offset = ClampScroll(p, #ranked, ROWS, 3)
     for i, r in ipairs(p.rows) do
-        local e = ranked[i + 3]
+        local n = offset + i + 3
+        local e = ranked[n]
         r:SetShown(e ~= nil)
         if e then
+            r.rank:SetText(tostring(n))
             Art.SetPortrait(r.portrait, Art.PlayerIcon(e.race, e.sex), nil) -- no frame below 3rd
             r.name:SetText(NameText(e))
             r.net:SetText(NetText(e))
