@@ -161,7 +161,13 @@ Comm.On("HELLO", function(f, sender)
     CheckVersion(f.v, sender, f.wn)
     -- a version mismatch with a guildie: a red error in chat (whoever is behind is named)
     local status = House.Status(sender)
-    if (status == "outdated" or status == "newer") and ns.Guild.IsMember(sender) then House.WarnOutdated(sender) end
+    -- a guildie on an older version: no message (it got noisy with many of them online at login) -
+    -- you're told if you try to play them, and the opponent list marks them. Our own version being
+    -- the old one: said once per session, not once per guildie.
+    if status == "newer" and ns.Guild.IsMember(sender) and not House.warnedSelf then
+        House.warnedSelf = true
+        House.WarnOutdated(sender)
+    end
     if ns.UI then ns.UI.Refresh() end
     if f.r then return end -- a reply to our hello: nothing more to send
     Hello(sender, true)    -- tell them our version too

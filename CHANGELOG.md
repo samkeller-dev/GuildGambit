@@ -5,6 +5,11 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.1.1 - 2026-11-17
+
+- No more "X has an outdated GuildGambit" line for every guildie on an old version when you log in. You're told only if you try to play them (and the opponent list marks them). If your own version is the old one, you're told once per session.
+- Lottery page: the "Paid" column no longer runs into the pot on the right, and the pot character no longer sees a stray "ticket(s)" label.
+
 ## 2.1.0 - 2026-11-16
 
 - **Change the lottery's draw date:** the lottery's creator has a **Change draw date** button on the lottery page (or `/gg lottery date`), for a date set by mistake or a draw that needs moving. Tickets already bought keep counting, and everyone's addon is told the new date. Players on 2.0.0 won't see the change until they update.
