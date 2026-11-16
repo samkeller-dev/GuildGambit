@@ -72,7 +72,7 @@ function KD.Challenge(target, wager)
         seed = math.random(1, 2147483646), state = "invite",
     })
     game.status = ("Waiting for %s to accept..."):format(ns.Short(target))
-    Comm.Send("KD_INV", { id = game.id, s = bet, z = game.seed }, target)
+    Comm.Send("KD_INV", { id = game.id, s = bet, z = game.seed, rm = Games.rematchTag }, target)
     ns.Log("Challenged %s to Kodo Crossing for %s.", ns.Short(target), ns.Stake(bet))
     C_Timer.After(KD.INVITE_TIMEOUT, function()
         if Games.Get(game.id) == game and game.state == "invite" then Games.Cancel(game, "no answer") end
@@ -186,13 +186,14 @@ Comm.On("KD_INV", function(f, sender)
     if not f.id or not bet or bet < 0 or not seed then return end
     local function no(reason) Comm.Send("KD_NO", { id = f.id, r = reason }, sender) end
     if Games.Busy() then return no("busy") end
+    if ns.db.dnd then return no("do not disturb") end
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local why = ns.House.CheckOpponent(sender)
     if why then return no(why) end
     local cant = ns.CantCover(bet)
     if cant then return no("can't cover " .. ns.Stake(bet) .. " - " .. cant) end
-    local text = ("%s challenges you to Kodo Crossing for %s. You each get one run on the same lanes - the higher score wins."):format(
-        ns.Short(sender), ns.Stake(bet))
+    local text = ("%s%s challenges you to Kodo Crossing for %s. You each get one run on the same lanes - the higher score wins."):format(
+        ns.RematchText(f.rm), ns.Short(sender), ns.Stake(bet))
     ns.UI.ShowInvite(text, function()
         if Games.Busy() then return no("busy") end
         if ns.CantCover(bet) then return no("can't cover the bet") end

@@ -368,10 +368,12 @@ end
 function Mail.MAIL_SHOW() Mail.open = true if ns.UI then ns.UI.Refresh() end end
 function Mail.MAIL_CLOSED()
     Mail.open = false
+    if ns.Lottery then ns.Lottery.OnMailClosed() end
     Mail.sending, Mail.queue = nil, nil
     if ns.UI then ns.UI.Refresh() end
 end
 function Mail.MAIL_SEND_SUCCESS()
+    if ns.Lottery and ns.Lottery.OnMailSent() then return end -- a lottery ticket or payout
     local s = Mail.sending
     if not s then return end
     Mail.sending = nil
@@ -379,6 +381,7 @@ function Mail.MAIL_SEND_SUCCESS()
     C_Timer.After(Mail.NEXT_DELAY, Mail.SendNext)
 end
 function Mail.MAIL_FAILED()
+    if ns.Lottery and ns.Lottery.OnMailFailed() then return end
     local s = Mail.sending
     if s then Stop(("The mail to %s failed - nothing was sent or recorded."):format(ns.Short(s.to))) end
 end

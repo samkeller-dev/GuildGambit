@@ -4,12 +4,20 @@ local ADDON_NAME, ns = ...
 local GetMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or _G.GetAddOnMetadata
 ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
+-- One short line about this version, sent with our hello so guildies on an older version see
+-- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
+ns.WHATS_NEW = "The guild lottery is here! Plus side bets, rematches and plenty of quality-of-life tweaks and fixes - check out the full changelog on CurseForge."
+-- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
+ns.WHATS_NEW_BIG = false
+
 local DEFAULTS = {
     debug = false,
     guildOnly = true,       -- only accept games from guild members
     whisperRolls = true,    -- whisper our rolls to opponents outside our group
     sound = true,           -- in-game sound effects
-    announce = true,        -- post wins in guild chat
+    gmute = false,          -- true: don't post wins in guild chat
+    dnd = false,            -- do not disturb: turn down every incoming challenge
+    debtReminder = true,    -- at login, say in chat who owes whom
     maxLedger = 500,        -- ledger entries kept
     window = { shown = false, point = "CENTER", x = 0, y = 0, tab = "play" },
     house = { maxBet = 100 }, -- gold
@@ -32,7 +40,11 @@ local function ApplyDefaults(dst, src)
 end
 
 function ns.InitDB()
-    GuildGambitDB = ApplyDefaults(GuildGambitDB or {}, DEFAULTS)
+    GuildGambitDB = GuildGambitDB or {}
+    -- 1.10: "announce off" became "gmute on"
+    if GuildGambitDB.gmute == nil and GuildGambitDB.announce == false then GuildGambitDB.gmute = true end
+    GuildGambitDB.announce = nil
+    GuildGambitDB = ApplyDefaults(GuildGambitDB, DEFAULTS)
     GuildGambitCharDB = ApplyDefaults(GuildGambitCharDB or {}, CHAR_DEFAULTS)
     ns.db = GuildGambitDB
     ns.charDB = GuildGambitCharDB
@@ -216,7 +228,7 @@ end
 
 --- Posts a line in guild chat (plain text: no colour codes) if announcements are on.
 function ns.GuildAnnounce(text)
-    if not ns.db.announce or not (IsInGuild and IsInGuild()) then return false end
+    if ns.db.gmute or not (IsInGuild and IsInGuild()) then return false end
     local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or _G.SendChatMessage
     if not send then return false end
     if #text > 255 then text = text:sub(1, 252) .. "..." end

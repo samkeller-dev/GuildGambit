@@ -20,6 +20,8 @@ function events.ADDON_LOADED(name)
     if name ~= ADDON_NAME then return end
     driver:UnregisterEvent("ADDON_LOADED")
     ns.InitDB()
+    local ok, err = pcall(ns.Options.Register) -- Options > AddOns > GuildGambit
+    if not ok then ns.Print("|cffff4040the options page failed to build: %s|r - the /gg commands still work.", tostring(err)) end
 end
 
 function events.PLAYER_LOGIN()
@@ -32,6 +34,7 @@ function events.PLAYER_LOGIN()
         if not ok then ns.Print("|cffff4040minimap button failed: %s|r - use /gg instead.", tostring(err)) end
     end
     ns.UI.Restore()
+    ns.Social.Login() -- right-click "Challenge" menus, and the debt reminder
     if not Compat.IS_FOREVER then
         ns.Print("built for WoW: Forever (interface 16001); this client reports %d.", Compat.interface)
     end
@@ -57,6 +60,9 @@ function events.PLAYER_MONEY(...)
     return ns.Payments.PLAYER_MONEY(...) -- (this table wins over Payments' own handler)
 end
 function events.PLAYER_LEVEL_UP() ns.Wealth.Changed() end
+
+-- the lottery's pot character: which ticket mail has arrived
+function events.MAIL_INBOX_UPDATE() ns.Lottery.ScanInbox() end
 
 -- the mailbox, for the Ledger tab's Pay debts button
 for _, e in ipairs({ "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED" }) do

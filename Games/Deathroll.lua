@@ -110,7 +110,7 @@ function DR.Challenge(target, stakeGold, start)
         Start(game)
     else
         game.status = ("Waiting for %s to accept..."):format(ns.Short(target))
-        Comm.Send("DR_INV", { id = game.id, s = stake, n = start }, target)
+        Comm.Send("DR_INV", { id = game.id, s = stake, n = start, rm = Games.rematchTag }, target)
         ns.Log("Challenged %s to a deathroll for %s (1-%d).", ns.Short(target), ns.Stake(stake), start)
         C_Timer.After(DR.INVITE_TIMEOUT, function()
             if Games.Get(game.id) == game and game.state == "invite" then Games.Cancel(game, "no answer") end
@@ -128,14 +128,15 @@ Comm.On("DR_INV", function(f, sender)
     if not f.id or not stake or stake < 0 or not start or start < 2 or start > DR.MAX_START then return end
     local function no(reason) Comm.Send("DR_NO", { id = f.id, r = reason }, sender) end
     if Games.Busy() then return no("busy") end
+    if ns.db.dnd then return no("do not disturb") end
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local why = ns.House.CheckOpponent(sender) -- e.g. their GuildGambit is outdated (shown in chat)
     if why then return no(why) end
     local cant = ns.CantCover(stake)
     if cant then return no("can't cover " .. ns.Stake(stake) .. " - " .. cant) end
 
-    local text = ("%s challenges you to a deathroll for %s (1-%d). They roll first."):format(
-        ns.Short(sender), ns.Stake(stake), start)
+    local text = ("%s%s challenges you to a deathroll for %s (1-%d). They roll first."):format(
+        ns.RematchText(f.rm), ns.Short(sender), ns.Stake(stake), start)
     ns.UI.ShowInvite(text, function()
         if Games.Busy() then return no("busy") end
         if ns.CantCover(stake) then return no("can't cover the bet") end
@@ -200,7 +201,9 @@ ns.Coinflip = CF
 CF.INVITE_TIMEOUT = 60
 CF.ACCEPT_RETRY = 5
 CF.ACCEPT_RETRIES = 6
-CF.FLIP_DELAY = 3.0 -- a moment of suspense (and time for spectators to tune in)
+CF.COUNTDOWN = 3       -- seconds from "both ready" to the flip
+CF.LOBBY_TIMEOUT = 90  -- both must click Ready within this long
+CF.SPIN = 1.2          -- the coin spins this long on screen before the result is revealed
 CF.PRACTICE = "Practice"
 CF.SIDES = {
     A = { faction = "Alliance", face = "Heads", roll = 1, icon = "Interface\\Icons\\INV_BannerPVP_02" },
@@ -235,34 +238,113 @@ local function Land(game, v, verified)
     Games.NoteRoll(game, verified)
     local landed = v == 1 and "A" or "H"
     game.landed = landed
+    game.state = "done"
     local mine = game.practice and game.call or CF.SideOf(game, ns.Me())
     local won = landed == mine
+    -- the result (sound, chat line, guild post) waits for the coin to stop spinning
+    game.revealDelay = CF.SPIN
     Games.Finish(game, won and game.bet or -game.bet, ("the coin landed %s"):format(CF.Label(landed)), won and 1 or -1)
 end
 
+--- Both players are in: watch for the challenger's roll, which comes after the countdown.
 local function Begin(game)
-    game.state = "play"
     local mine = game.practice and game.call or CF.SideOf(game, ns.Me())
     ns.Log("Coinflip vs %s for %s: you're %s.", ns.Short(game.opponent), ns.Stake(game.bet), CF.Label(mine))
-    ns.Sound("coin")
     local key = game.id .. ":flip"
     Rolls.Watch({
         player = game.a, min = 1, max = 2, key = key,
         relayTo = (ns.IsMe(game.a) and not game.practice) and { game.opponent } or nil,
         onRoll = function(v, verified) Land(game, v, verified) end,
     })
-    if ns.IsMe(game.a) then
-        game.status = "Flipping..."
-        C_Timer.After(CF.FLIP_DELAY, function()
-            if Games.Get(game.id) == game and Rolls.IsWatching(key) and not Rolls.Roll(1, 2) then
+    return key
+end
+
+--- 3, 2, 1... then the challenger flips. Both sides count down (the opponent's from CF_GO).
+local function Countdown(game)
+    if game.state ~= "lobby" then return end
+    game.state = "countdown"
+    ns.UI.SetRollPrompt(nil)
+    local key = Begin(game)
+    local left = CF.COUNTDOWN
+    local function tick()
+        if Games.Get(game.id) ~= game or game.state ~= "countdown" then return end
+        if left > 0 then
+            game.status = ("Flipping in %d..."):format(left)
+            game.specStatus = game.status
+            ns.Sound("card")
+            left = left - 1
+            ns.UI.Refresh()
+            C_Timer.After(1, tick)
+            return
+        end
+        game.state = "play"
+        ns.Sound("coin")
+        if ns.IsMe(game.a) or game.practice then
+            game.status, game.specStatus = "Flipping...", "Flipping..."
+            if Rolls.IsWatching(key) and not Rolls.Roll(1, 2) then
                 game.status = "Flip the coin!"
                 ns.UI.SetRollPrompt(1, 2, "Flip!") -- RandomRoll unavailable: flip by hand
             end
-        end)
-    else
-        game.status = ("%s is flipping..."):format(ns.Short(game.a))
+        else
+            game.status = ("%s is flipping..."):format(ns.Short(game.a))
+            game.specStatus = "Flipping..."
+        end
+        ns.UI.Refresh()
     end
+    tick()
+end
+
+--- The challenger: both ready - tell the opponent and start counting.
+local function Go(game)
+    if not game.practice then Comm.Send("CF_GO", { id = game.id }, game.opponent) end
+    Countdown(game)
+end
+
+local function LobbyStatus(game)
+    local them = ns.Short(game.opponent)
+    if game.ready.me then
+        game.status = ("Ready - waiting for %s..."):format(them)
+    else
+        game.status = game.ready.them and ("%s is ready - click Ready!"):format(them) or "Click Ready when you are."
+    end
+    local iAmA = ns.IsMe(game.a)
+    local readyA = iAmA and game.ready.me or (not iAmA and game.ready.them)
+    local readyB = iAmA and game.ready.them or (not iAmA and game.ready.me)
+    game.specStatus = ("Waiting for both to ready up (%s%s, %s%s)"):format(ns.Short(game.a), readyA and " ready" or "",
+        ns.Short(game.b), readyB and " ready" or "")
+end
+
+--- Accepted: both players wait in the lobby until each clicks Ready.
+local function Lobby(game)
+    game.state = "lobby"
+    game.ready = { me = false, them = false }
+    LobbyStatus(game)
+    ns.UI.SetAction("Ready", function() CF.Ready(game) end)
     ns.UI.Refresh()
+    C_Timer.After(CF.LOBBY_TIMEOUT, function()
+        if Games.Get(game.id) == game and game.state == "lobby" then Games.Cancel(game, "nobody readied up in time") end
+    end)
+end
+
+function CF.Ready(game)
+    if not game or Games.Get(game.id) ~= game or game.state ~= "lobby" or game.ready.me then return false end
+    game.ready.me = true
+    ns.UI.SetRollPrompt(nil)
+    if game.practice then Go(game) return true end
+    if ns.IsMe(game.a) then
+        if game.ready.them then Go(game) return true end
+    else
+        -- tell the challenger, and keep telling them until the countdown starts
+        local function send()
+            if Games.Get(game.id) ~= game or game.state ~= "lobby" then return end
+            Comm.Send("CF_READY", { id = game.id }, game.opponent)
+            C_Timer.After(CF.ACCEPT_RETRY, send)
+        end
+        send()
+    end
+    LobbyStatus(game)
+    ns.UI.Refresh()
+    return true
 end
 
 --- Coinflip against a guildie, or practice. call: "A"/"H" or a word (default: your faction).
@@ -287,11 +369,11 @@ function CF.Challenge(target, betGold, call)
         bet = bet, call = call, practice = practice, verified = true, state = "invite",
     })
     if practice then
-        Begin(game)
+        Lobby(game)
         return game
     end
     game.status = ("Waiting for %s to accept..."):format(ns.Short(target))
-    Comm.Send("CF_INV", { id = game.id, s = bet, c = call }, target)
+    Comm.Send("CF_INV", { id = game.id, s = bet, c = call, rm = Games.rematchTag }, target)
     ns.Log("Challenged %s to a coinflip for %s - you call %s.", ns.Short(target), ns.Stake(bet), CF.Label(call))
     C_Timer.After(CF.INVITE_TIMEOUT, function()
         if Games.Get(game.id) == game and game.state == "invite" then Games.Cancel(game, "no answer") end
@@ -310,13 +392,14 @@ Comm.On("CF_INV", function(f, sender)
     if not f.id or not bet or bet < 0 or not CF.SIDES[f.c or ""] then return end
     local function no(reason) Comm.Send("CF_NO", { id = f.id, r = reason }, sender) end
     if Games.Busy() then return no("busy") end
+    if ns.db.dnd then return no("do not disturb") end
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local why = ns.House.CheckOpponent(sender) -- e.g. their GuildGambit is outdated (shown in chat)
     if why then return no(why) end
     local cant = ns.CantCover(bet)
     if cant then return no("can't cover " .. ns.Stake(bet) .. " - " .. cant) end
-    local text = ("%s flips a coin for %s and calls %s - you're %s. Winner takes the pot."):format(
-        ns.Short(sender), ns.Stake(bet), CF.Label(f.c), CF.Label(OtherSide(f.c)))
+    local text = ("%s%s flips a coin for %s and calls %s - you're %s. Winner takes the pot."):format(
+        ns.RematchText(f.rm), ns.Short(sender), ns.Stake(bet), CF.Label(f.c), CF.Label(OtherSide(f.c)))
     ns.UI.ShowInvite(text, function()
         if Games.Busy() then return no("busy") end
         if ns.CantCover(bet) then return no("can't cover the bet") end
@@ -325,12 +408,13 @@ Comm.On("CF_INV", function(f, sender)
             bet = bet, call = f.c, verified = true, state = "invite",
         })
         Comm.Send("CF_ACC", { id = f.id }, sender)
-        Begin(game)
+        Lobby(game)
+        -- if our "accepted" got lost the challenger never joins the lobby: resend until they answer
         local tries = 0
         local function retry()
-            if Games.Get(game.id) ~= game then return end
+            if Games.Get(game.id) ~= game or game.heard then return end
             tries = tries + 1
-            if tries > CF.ACCEPT_RETRIES then return Games.Cancel(game, ns.Short(sender) .. " never flipped") end
+            if tries > CF.ACCEPT_RETRIES then return Games.Cancel(game, ns.Short(sender) .. " never answered") end
             Comm.Send("CF_ACC", { id = f.id }, sender)
             C_Timer.After(CF.ACCEPT_RETRY, retry)
         end
@@ -341,10 +425,43 @@ end)
 Comm.On("CF_ACC", function(f, sender)
     local game = TheirFlip(f, sender)
     if game then
-        if game.state == "invite" then Begin(game) end
+        if game.state == "invite" then Lobby(game) end
+        Comm.Send("CF_HI", { id = f.id }, sender) -- "I'm in the lobby too"
         return
     end
     Comm.Send("CF_GONE", { id = f.id }, sender)
+end)
+
+Comm.On("CF_HI", function(f, sender)
+    local game = TheirFlip(f, sender)
+    if game then game.heard = true end
+end)
+
+-- the opponent is ready (challenger's side)
+Comm.On("CF_READY", function(f, sender)
+    local game = TheirFlip(f, sender)
+    if not game then return end
+    game.heard = true
+    if game.state == "lobby" then
+        game.ready.them = true
+        if game.ready.me then return Go(game) end
+        LobbyStatus(game)
+        ns.Sound("card")
+        ns.UI.Refresh()
+    elseif game.state == "countdown" or game.state == "play" then
+        Comm.Send("CF_GO", { id = game.id }, sender) -- our "go" got lost
+    end
+end)
+
+-- both ready: count down (opponent's side)
+Comm.On("CF_GO", function(f, sender)
+    local game = TheirFlip(f, sender)
+    if not game then return end
+    game.heard = true
+    if game.state == "lobby" then
+        game.ready.them = true
+        Countdown(game)
+    end
 end)
 
 Comm.On("CF_NO", function(f, sender)
@@ -461,7 +578,7 @@ function GDR.Open(betText, start)
     if start < 2 or start > DR.MAX_START then ns.Print("Start must be 2-%d.", DR.MAX_START) return nil end
 
     local game = NewRoom({ id = ns.NewId(), host = ns.Me(), bet = bet, start = start, players = { ns.Me() } })
-    Comm.Send("GDR_OPEN", { id = game.id, s = bet, n = start }, nil)
+    Comm.Send("GDR_OPEN", { id = game.id, s = bet, n = start, rm = Games.rematchTag }, nil)
     ns.Log("You opened a group deathroll for %s each (1-%d). Press Start once guildies have joined.",
         ns.Stake(bet), start)
     UpdateLobbyStatus(game)
@@ -672,13 +789,14 @@ Comm.On("GDR_OPEN", function(f, sender)
     local bet, start = tonumber(f.s), tonumber(f.n)
     if not f.id or not bet or bet < 0 or not start or start < 2 or start > DR.MAX_START then return end
     if Games.Busy() or not ns.Guild.Allowed(sender) then return end
+    if ns.db.dnd then return end -- do not disturb: not even the invite
     if ns.House.CheckOpponent(sender) then return end -- versions don't match (shown in chat)
     if ns.CantCover(bet) then
         ns.Log("%s opened a group deathroll for %s each - more than you can cover.", ns.Short(sender), ns.Stake(bet))
         return
     end
-    local text = ("%s opened a group deathroll for %s each (1-%d). Last one standing takes the pot. Join?"):format(
-        ns.Short(sender), ns.Stake(bet), start)
+    local text = ("%s%s opened a group deathroll for %s each (1-%d). Last one standing takes the pot. Join?"):format(
+        ns.RematchText(f.rm), ns.Short(sender), ns.Stake(bet), start)
     ns.UI.ShowInvite(text, function()
         if Games.Busy() then ns.Print("Finish your current game first.") return end
         if ns.CantCover(bet) then ns.Print("You can't cover %s.", ns.Stake(bet)) return end

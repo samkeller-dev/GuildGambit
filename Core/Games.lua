@@ -72,28 +72,33 @@ function Games.Finish(game, net, summary, outcome)
     local tag = practice and " |cff888888(practice)|r" or
         (game.verified == false and " |cffff8800(unverified rolls)|r" or "")
     local result = ns.ResultText(net, outcome)
-    ns.Log("%s vs %s: %s - %s%s", game.title, ns.Short(game.opponent), summary, result, tag)
     game.finished, game.net, game.summary = true, net, summary
-    if not game.asHouse then
-        Games.last = game -- the table keeps showing the final hand
-        local event = outcome > 0 and (game.bigWin and "bigwin" or "win")
-            or outcome < 0 and (game.bust and "bust" or "lose") or "push"
-        -- the loser of a deathroll already heard the death cry; nothing on top of it.
-        -- Any win: a short coin jingle; beating another player or a jackpot adds a cheer.
-        -- Any loss: the crying emote.
-        if not game.deathCry then
-            ns.Sound(event)
-            if outcome > 0 and (game.kind == "deathroll" or game.kind == "coinflip" or game.mode == "duel" or game.bigWin) then
-                C_Timer.After(0.3, function() ns.Sound("cheer") end)
+    if not game.asHouse then Games.last = game end -- the table keeps showing the final hand
+    -- the result itself: in chat, as a sound and in guild chat. A coinflip holds it back until
+    -- the coin has stopped spinning, so you can't hear (or read) the result before you see it.
+    local function Reveal()
+        ns.Log("%s vs %s: %s - %s%s", game.title, ns.Short(game.opponent), summary, result, tag)
+        if not game.asHouse then
+            local event = outcome > 0 and (game.bigWin and "bigwin" or "win")
+                or outcome < 0 and (game.bust and "bust" or "lose") or "push"
+            -- the loser of a deathroll already heard the death cry; nothing on top of it.
+            -- Any win: a short coin jingle; beating another player or a jackpot adds a cheer.
+            -- Any loss: the crying emote.
+            if not game.deathCry then
+                ns.Sound(event)
+                if outcome > 0 and (game.kind == "deathroll" or game.kind == "coinflip" or game.mode == "duel" or game.bigWin) then
+                    C_Timer.After(0.3, function() ns.Sound("cheer") end)
+                end
             end
         end
+        -- every 1v1 game: the winner's addon posts it in guild chat (so it's posted once)
+        if outcome > 0 and not practice and not game.asHouse then
+            local what = WON_TEXT[game.kind] or ("won " .. (game.title or "a game"))
+            ns.GuildAnnounce(("[GuildGambit] %s %s against %s %s!"):format(ns.Short(ns.Me()), what,
+                ns.Short(game.opponent), net > 0 and ("for " .. ns.Money(net)) or "just for fun"))
+        end
     end
-    -- every 1v1 game: the winner's addon posts it in guild chat (so it's posted once)
-    if outcome > 0 and not practice and not game.asHouse then
-        local what = WON_TEXT[game.kind] or ("won " .. (game.title or "a game"))
-        ns.GuildAnnounce(("[GuildGambit] %s %s against %s %s!"):format(ns.Short(ns.Me()), what,
-            ns.Short(game.opponent), net > 0 and ("for " .. ns.Money(net)) or "just for fun"))
-    end
+    if game.revealDelay then C_Timer.After(game.revealDelay, Reveal) else Reveal() end
     Games.Remove(game)
     if not practice and ns.Board then ns.Board.Changed() end
 end
@@ -110,6 +115,60 @@ function Games.Cancel(game, why, silent)
     if game.OnCancel then game:OnCancel() end
     Games.Remove(game)
     return true
+end
+
+---------------------------------------------------------------------------
+-- Rematch / double or nothing: the same game against the same player, at the same stake or
+-- twice it. Either player can offer it from the finished table; the invite says it's a rematch.
+---------------------------------------------------------------------------
+Games.rematchTag = nil -- "r" or "d" while a rematch challenge is being sent (read by the *_INV senders)
+
+--- "Rematch! " / "Double or nothing! " for an invite's text.
+function ns.RematchText(tag)
+    if tag == "d" then return "|cffffd100Double or nothing!|r " end
+    if tag == "r" then return "|cffffd100Rematch!|r " end
+    return ""
+end
+
+local REMATCH = { deathroll = true, coinflip = true, kodo = true, blackjack = true, groupdr = true }
+
+--- The finished game a rematch would repeat, or nil.
+function Games.RematchOf()
+    local g = Games.last
+    if not g or not g.finished or Games.Busy() or not REMATCH[g.kind] then return nil end
+    if g.kind == "blackjack" and g.mode ~= "duel" and not g.practice then return nil end
+    if g.kind == "groupdr" and not ns.IsMe(g.host) then return nil end -- the host reopens the room
+    return g
+end
+
+local function Stake(g) return g.bet or g.stake or 0 end
+
+--- True if double or nothing makes sense (there was gold on it).
+function Games.CanDouble()
+    local g = Games.RematchOf()
+    return g ~= nil and Stake(g) > 0 and Stake(g) * 2 <= ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD
+end
+
+function Games.Rematch(double)
+    local g = Games.RematchOf()
+    if not g then return nil end
+    local stake = Stake(g) * (double and 2 or 1)
+    local money = stake .. "c"
+    local target = g.practice and "practice" or g.opponent
+    Games.rematchTag = (not g.practice) and (double and "d" or "r") or nil
+    local ok, game = pcall(function()
+        if g.kind == "deathroll" then return ns.Deathroll.Challenge(target, money, g.start)
+        elseif g.kind == "coinflip" then
+            -- keep your side of the coin
+            return ns.Coinflip.Challenge(target, money, g.practice and g.call or ns.Coinflip.SideOf(g, ns.Me()))
+        elseif g.kind == "blackjack" then return ns.Blackjack.Deal(target, money)
+        elseif g.kind == "kodo" then return ns.Kodo.Challenge(target, money)
+        elseif g.kind == "groupdr" then return ns.GroupDeathroll.Open(money, g.start)
+        end
+    end)
+    Games.rematchTag = nil
+    if not ok then ns.Print("|cffff4040rematch failed: %s|r", tostring(game)) return nil end
+    return game
 end
 
 --- Marks a game unverified if any roll in it came from a relay.

@@ -11,7 +11,7 @@ House.peers = {} -- name -> { version, protocol, seen }
 
 -- Bumped only when the game messages change, so bug-fix releases stay compatible.
 -- Versions before 0.5.1 don't send it and count as outdated.
-House.PROTOCOL = 7
+House.PROTOCOL = 8
 
 local function Peer(name)
     local p = House.peers[name] or {}
@@ -50,7 +50,7 @@ function House.OnlinePeers()
         if not ns.IsMe(name) and ns.Guild.IsMember(name) then
             local online = ns.Guild.IsOnline(name)
             if online == nil then online = (time() - (p.seen or 0)) < House.PEER_RECENT end
-            if online then out[#out + 1] = { name = name, version = p.version, status = House.Status(name) } end
+            if online then out[#out + 1] = { name = name, version = p.version, status = House.Status(name), dnd = p.dnd } end
         end
     end
     table.sort(out, function(a, b) return a.name < b.name end)
@@ -59,7 +59,18 @@ end
 
 local function Hello(target, isReply)
     Comm.Send("HELLO", { v = ns.version, p = House.PROTOCOL, n = (not target) and ns.nonce or nil,
-        r = isReply and 1 or nil }, target)
+        r = isReply and 1 or nil, d = ns.db.dnd and 1 or nil, wn = ns.WHATS_NEW, wb = ns.WHATS_NEW_BIG and 1 or nil }, target)
+end
+
+--- Do not disturb was switched: tell the guild (a reply-style hello, so nobody answers).
+function House.SayDnd()
+    Comm.Send("HELLO", { v = ns.version, p = House.PROTOCOL, r = 1, d = ns.db.dnd and 1 or 0 }, nil)
+end
+
+--- True if name has do not disturb on (as far as we've heard).
+function House.IsDnd(name)
+    local p = House.peers[ns.Full(name) or ""]
+    return p and p.dnd or false
 end
 
 function House.SayHello()
@@ -73,6 +84,11 @@ function House.AskVersion(name)
     Hello(name, false)
 end
 
+--- For a big update: where to read everything that changed.
+function House.PrintChangelogHint()
+    ns.Print("|cffffd100Lots changed - see the full changelog on CurseForge (GuildGambit's Files tab).|r")
+end
+
 --- The red error for an outdated player, at most once per player per session.
 local warnedOutdated = {}
 function House.WarnOutdated(name, force)
@@ -83,6 +99,8 @@ function House.WarnOutdated(name, force)
     if House.Status(name) == "newer" then
         ns.Print("|cffff4040Your GuildGambit is outdated (v%s) - %s has v%s. Update to play together.|r",
             ns.version, ns.Short(name), p.version or "?")
+        if p.whatsNew then ns.Print("|cffffd100What's new in v%s:|r %s", p.version or "?", p.whatsNew) end
+        if p.whatsNewBig then House.PrintChangelogHint() end
     else
         ns.Print("|cffff4040%s has an outdated GuildGambit (v%s) - you have v%s. They need to update before you can play together.|r",
             ns.Short(name), p.version or "?", ns.version)
@@ -120,18 +138,27 @@ function House.IsNewer(a, b)
 end
 
 local warnedVersion
-local function CheckVersion(theirs, sender)
+local function CheckVersion(theirs, sender, whatsNew)
     if theirs and House.IsNewer(theirs, ns.version) and theirs ~= warnedVersion then
         warnedVersion = theirs
         ns.Print("|cffffd100%s has GuildGambit v%s - you have v%s. Please update, older versions may not play with newer ones.|r",
             ns.Short(sender), theirs, ns.version)
+        -- (an incompatible version prints this with its red error instead)
+        local p = House.peers[ns.Full(sender) or ""]
+        if whatsNew and whatsNew ~= "" and not (p and House.Status(sender) == "newer") then
+            ns.Print("|cffffd100What's new in v%s:|r %s", theirs, whatsNew:sub(1, 160))
+            if p and p.whatsNewBig then House.PrintChangelogHint() end
+        end
     end
 end
 
 Comm.On("HELLO", function(f, sender)
     local p = Peer(sender)
     p.version, p.protocol = f.v, tonumber(f.p)
-    CheckVersion(f.v, sender)
+    if f.wn and f.wn ~= "" then p.whatsNew = f.wn:sub(1, 160) end
+    p.whatsNewBig = f.wb == "1"
+    p.dnd = f.d == "1"
+    CheckVersion(f.v, sender, f.wn)
     -- a version mismatch with a guildie: a red error in chat (whoever is behind is named)
     local status = House.Status(sender)
     if (status == "outdated" or status == "newer") and ns.Guild.IsMember(sender) then House.WarnOutdated(sender) end
@@ -143,6 +170,7 @@ Comm.On("HELLO", function(f, sender)
         ns.Board.Send(sender)
     end
     if ns.Wealth then ns.Wealth.Send(sender) end
+    if ns.Lottery then ns.Lottery.OnHello(sender) end
 end)
 
 -- Shared messages handled here so every module is loaded first.
@@ -302,7 +330,12 @@ function Live.End(game)
     -- the final table first, then the result
     if next(live.watchers) then Comm.Send("STATE", Live.State(game), nil, { key = "STATE" .. game.id }) end
     for name, w in pairs(live.watchers) do if w == "text" then SendSpec(game, name) end end
-    Comm.Send("LIVE_END", { id = game.id, r = Cut(Live.ResultText(game)) }, nil)
+    local result = Cut(Live.ResultText(game))
+    local function send()
+        Comm.Send("LIVE_END", { id = game.id, r = result }, nil)
+        if ns.SideBets then ns.SideBets.Close(game) end
+    end
+    if game.revealDelay then C_Timer.After(game.revealDelay, send) else send() end
 end
 
 function Live.WatcherCount(game)
@@ -321,6 +354,7 @@ local function Tick()
             live = { sent = 0, watchers = {}, last = nil }
             game.live = live
         end
+        if ns.SideBets then ns.SideBets.Touch(game) end
         local h = Live.Describe(game)
         if now - live.sent >= Live.HEARTBEAT or live.header ~= h then
             live.sent, live.header = now, h
@@ -444,6 +478,7 @@ end)
 Comm.On("LIVE_END", function(f, sender)
     local g = Live.games[f.id or ""]
     if not g or not ns.SameName(g.host, sender) then return end
+    if ns.SideBets then ns.SideBets.GameEnded(f.id) end
     if Live.watching == f.id then
         -- the game we're watching: keep its final table up for a moment, with the result
         g.ended, g.endedAt = f.r or "Finished", GetTime()
@@ -538,9 +573,11 @@ function Live.State(game)
         f.t, f.w, f.mx, f.st, f.ga = num(game.turn), num(game.winner), game.max or game.start, game.start, game.state
         local lr = game.lastRoll
         if lr then f.lw, f.lv, f.lm, f.ls = num(lr.who), lr.value, lr.max, lr.seq end
+        if ns.SideBets then ns.SideBets.AddToState(game, f) end
         return f
     end
     f.a, f.b, f.s = game.a, game.b, game.bet or game.stake or 0
+    if ns.SideBets then ns.SideBets.AddToState(game, f) end
     if game.finished then
         local o = game.outcome or 0
         f.o = o == 0 and "" or side(o > 0 and ns.Me() or game.opponent)
@@ -574,7 +611,7 @@ function Live.State(game)
             end
         end
     elseif game.kind == "coinflip" then
-        f.c, f.l = game.call, game.landed
+        f.c, f.l, f.cs = game.call, game.landed, game.specStatus
     elseif game.kind == "kodo" then
         f.sa, f.sb = game.scores.a or 0, game.scores.b or 0
         f.da, f.db = game.finishedRun.a and 1 or 0, game.finishedRun.b and 1 or 0
@@ -639,7 +676,7 @@ function Live.Mirror(entry, f)
     elseif kind == "coinflip" then
         m.title, m.bet, m.call = "Coinflip", num(f.s) or 0, f.c
         m.landed = (f.l and f.l ~= "") and f.l or nil
-        m.status = "Flipping..."
+        m.status = (f.cs and f.cs ~= "") and f.cs or "Flipping..." -- the lobby and the countdown
     end
     return m
 end
@@ -653,6 +690,7 @@ Comm.On("STATE", function(f, sender)
     local ok, m = pcall(Live.Mirror, g, f)
     if ok and m then
         g.mirror = m
+        if ns.SideBets then ns.SideBets.FromState(m, f) end
         if m.kind == "kodo" and Live.watching == g.id and not g.askedB and m.b then
             g.askedB = m.b
             Comm.Send("WATCH", { id = g.id, v = 2 }, m.b)

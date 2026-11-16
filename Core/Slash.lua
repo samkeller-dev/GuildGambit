@@ -23,7 +23,13 @@ local HELP = {
     "/gg art - check the dragon frames | art <kind> cx cy d - adjust",
     "/gg undo - remove your last game (e.g. a mistyped bet)",
     "/gg whispers on|off - whisper your rolls to opponents outside your group",
-    "/gg sound on|off - sound effects | /gg announce on|off - post your wins in guild chat",
+    "/gg dnd - do not disturb: turn down every incoming challenge (again to turn it off)",
+    "/gg gmute - stop posting your wins in guild chat (again to turn it back on)",
+    "/gg remind - who owes whom, now | /gg remind on|off - the reminder at login",
+    "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|draw|close",
+    "Right-click a guildie (chat name, portrait, guild list) > Challenge - uses the wager on the Play tab",
+    "After a game: Rematch or Double or nothing | Live tab: back a player with a side bet",
+    "/gg sound on|off - sound effects | /gg options - the settings page (Options > AddOns)",
     "/gg reset <password> - new leaderboard season, clears all debts",
     "/gg minimap - show/hide the minimap button",
     "/gg guildonly on|off | debug | info",
@@ -209,11 +215,56 @@ commands.art = function(what, a, b, c)
     ns.UI.Refresh()
 end
 
-commands.guildonly = function(state)
+--- "on" -> true, "off" -> false, anything else -> nil (toggle)
+local function OnOff(state)
     state = (state or ""):lower()
-    if state == "on" then ns.db.guildOnly = true elseif state == "off" then ns.db.guildOnly = false end
-    ns.Print("Guild-only games: %s", ns.db.guildOnly and "on" or "off")
+    if state == "on" then return true elseif state == "off" then return false end
 end
+
+commands.guildonly = function(state)
+    local on = ns.Options.Set("guildOnly", OnOff(state))
+    ns.Print("Guild-only games: %s", on and "on" or "off")
+end
+
+commands.dnd = function(state)
+    local on = ns.Options.Set("dnd", OnOff(state))
+    ns.Print(on and "|cffff8040Do not disturb is on|r - every incoming challenge is turned down. /gg dnd again to take games."
+        or "|cff20ff20Do not disturb is off|r - you're taking challenges again.")
+end
+
+commands.gmute = function(state)
+    local on = ns.Options.Set("gmute", OnOff(state))
+    ns.Print(on and "Guild chat muted - your wins won't be posted. /gg gmute again to unmute."
+        or "Guild chat unmuted - your wins are posted in guild chat again.")
+end
+
+commands.options = function() ns.Options.Open() end
+
+-- "/gg lottery": the lottery page; "/gg lottery buy 2" at a mailbox; officers: draw / cancel
+commands.lottery = function(action, n)
+    action = (action or ""):lower()
+    if action == "buy" then ns.Lottery.Buy(tonumber(n) or 1)
+    elseif action == "draw" then ns.Lottery.Draw()
+    elseif action == "paid" then ns.Lottery.MarkPaid("winner")
+    elseif action == "check" then ns.Lottery.Check()
+    elseif action == "announce" then ns.Lottery.Announce()
+    elseif action == "close" then ns.Lottery.Close()
+    else ns.UI.ShowLottery() end
+end
+commands.lotto = commands.lottery
+
+-- "/gg remind": the debt reminder now; "/gg remind on|off": at login or not
+commands.remind = function(state)
+    local on = OnOff(state)
+    if on ~= nil then
+        ns.Options.Set("debtReminder", on)
+        ns.Print("Debt reminder at login: %s", on and "on" or "off")
+        return
+    end
+    if not ns.Social.RemindDebts() then ns.Print("Nobody owes anybody - all square.") end
+end
+commands.settings = commands.options
+commands.config = commands.options
 
 -- What the game reports for us vs what we've learned from the server (for bug reports).
 commands.whoami = function()
@@ -279,23 +330,23 @@ commands.sound = function(state)
             or ("Couldn't play the %s sound - is /gg sound on, and the game's sound enabled?"):format(state))
         return
     end
-    if state == "on" then ns.db.sound = true elseif state == "off" then ns.db.sound = false
-    else ns.db.sound = not ns.db.sound end
+    ns.Options.Set("sound", OnOff(state))
     ns.Print("Sound effects: %s", ns.db.sound and "on" or "off")
     if ns.db.sound then ns.Sound("win") end
 end
 commands.sounds = commands.sound
 
+-- the old way to mute guild chat (announce off = gmute on)
 commands.announce = function(state)
-    state = (state or ""):lower()
-    if state == "on" then ns.db.announce = true elseif state == "off" then ns.db.announce = false
-    else ns.db.announce = not ns.db.announce end
-    ns.Print("Posting your wins in guild chat: %s", ns.db.announce and "on" or "off")
+    local on = OnOff(state)
+    if on ~= nil then on = not on end
+    local muted = ns.Options.Set("gmute", on)
+    ns.Print("Posting your wins in guild chat: %s", muted and "off" or "on")
 end
 
 commands.whispers = function(state)
     state = (state or ""):lower()
-    if state == "on" then ns.db.whisperRolls = true elseif state == "off" then ns.db.whisperRolls = false end
+    ns.Options.Set("whisperRolls", OnOff(state))
     ns.Print("Whispering your rolls to opponents outside your group: %s", ns.db.whisperRolls and "on" or "off")
 end
 
@@ -303,7 +354,7 @@ commands.minimap = function(state)
     state = (state or ""):lower()
     local b = ns.MinimapButton.Button()
     local shown = state == "show" or state == "on" or (state == "" and not (b and b:IsShown()))
-    ns.MinimapButton.SetShown(shown)
+    ns.Options.Set("hide", not shown)
     ns.Print("Minimap button %s.", shown and "shown" or "hidden - /gg minimap to bring it back")
 end
 
