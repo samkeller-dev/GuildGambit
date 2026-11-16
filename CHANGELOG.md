@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.1.0 - 2026-11-16
+
+- **Change the lottery's draw date:** the lottery's creator has a **Change draw date** button on the lottery page (or `/gg lottery date`), for a date set by mistake or a draw that needs moving. Tickets already bought keep counting, and everyone's addon is told the new date. Players on 2.0.0 won't see the change until they update.
+
 ## 2.0.0 - 2026-11-16 (protocol 8)
 
 **Everyone needs to update:** coinflips work differently, so 2.0 can't play with 1.x versions at all - the version check shows an error and blocks games until both players are on 2.0.

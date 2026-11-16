@@ -280,6 +280,8 @@ function LUI.Build(p)
         ns.UI.ShowInvite("Close this lottery? It's removed for everyone.", function() ns.Lottery.Close() end, function() end)
     end)
     view.close:SetPoint("LEFT", view.announce, "RIGHT", 8, 0)
+    view.changeDate = Button(view, "Change draw date", 150, function() LUI.ShowDateForm() end)
+    view.changeDate:SetPoint("TOPLEFT", RIGHT, -262)
 
     BuildDraw(view)
     return view
@@ -306,6 +308,7 @@ function LUI.Refresh()
     local creatorOpen = L and L.state == "open" and ns.IsMe(L.by)
     view.announce:SetShown(creatorOpen and true or false)
     view.close:SetShown(creatorOpen and true or false)
+    view.changeDate:SetShown(creatorOpen and true or false)
     if creatorOpen then
         view.announce:SetText(L.announced and "Announce again" or "Announce")
         if Lot.Now() < Lot.SalesClose(L) then view.announce:Enable() else view.announce:Disable() end
@@ -508,17 +511,20 @@ local function BuildForm()
     title:SetPoint("TOP", 0, -18)
 
     local y = -50
-    local function Row(text)
+    f.setupRows = {} -- the rows hidden when only the date is being changed
+    local function Row(text, setup)
         local l = Label(f, text, "GameFontNormal")
         l:SetPoint("TOPLEFT", 22, y)
         y = y - 34
+        if setup then f.setupRows[#f.setupRows + 1] = l end
         return l
     end
-    local potL = Row("Pot held by:")
+    f.title = title
+    local potL = Row("Pot held by:", true)
     BuildPotPicker(f)
     f.potPick:SetPoint("LEFT", potL, "RIGHT", 10, 0)
 
-    local priceL = Row("Ticket price:")
+    local priceL = Row("Ticket price:", true)
     f.gold = Input(f, 50, "10", 6)
     f.gold:SetPoint("LEFT", priceL, "RIGHT", 10, 0)
     local g = Label(f, "|TInterface\\MoneyFrame\\UI-GoldIcon:12:12|t")
@@ -528,9 +534,10 @@ local function BuildForm()
     local s = Label(f, "|TInterface\\MoneyFrame\\UI-SilverIcon:12:12|t")
     s:SetPoint("LEFT", f.silver, "RIGHT", 2, 0)
 
-    local maxL = Row("Most tickets per player:")
+    local maxL = Row("Most tickets per player:", true)
     f.max = Input(f, 36, "5", 3)
     f.max:SetPoint("LEFT", maxL, "RIGHT", 10, 0)
+    for _, w in ipairs({ f.potPick, f.gold, g, f.silver, s, f.max }) do f.setupRows[#f.setupRows + 1] = w end
 
     local dayL = Row("Draw day:")
     f.prevDay = Button(f, "<", 24, function() f.day = math.max(0, f.day - 1) RefreshForm() end)
@@ -554,13 +561,17 @@ local function BuildForm()
     f.when = Label(f, "", "GameFontHighlightSmall")
     f.when:SetPoint("TOPLEFT", 22, y + 6)
     f.when:SetWidth(316)
-    local note = Label(f, "|cff888888Only one lottery at a time, and it can't be cancelled once open.|r", "GameFontHighlightSmall")
-    note:SetPoint("TOPLEFT", 22, y - 28)
-    note:SetWidth(316)
+    f.note = Label(f, "", "GameFontHighlightSmall")
+    f.note:SetPoint("TOPLEFT", 22, y - 28)
+    f.note:SetWidth(316)
 
     local create = Button(f, "Open lottery", 120, function()
         local hour, minute = Num(f.hour), Num(f.minute)
         if hour > 23 or minute > 59 then ns.Print("Enter a time like 20:00.") return end
+        if f.dateOnly then
+            if ns.Lottery.ChangeDate(FormTime()) then f:Hide() ns.UI.ShowLottery() end
+            return
+        end
         local L = ns.Lottery.Open({
             pot = f.pot or nil, price = Num(f.gold) * ns.COPPER_PER_GOLD + Num(f.silver) * 100,
             max = Num(f.max), drawAt = FormTime(),
@@ -568,9 +579,19 @@ local function BuildForm()
         if L then f:Hide() ns.UI.ShowLottery() end
     end)
     create:SetPoint("BOTTOMRIGHT", -20, 18)
+    f.create = create
     local close = Button(f, "Cancel", 80, function() f:Hide() end)
     close:SetPoint("RIGHT", create, "LEFT", -8, 0)
     f:Hide()
+end
+
+local function FormMode(dateOnly)
+    form.dateOnly = dateOnly
+    for _, w in ipairs(form.setupRows) do w:SetShown(not dateOnly) end
+    form.title:SetText(dateOnly and "Change the draw date" or "New guild lottery")
+    form.create:SetText(dateOnly and "Save date" or "Open lottery")
+    form.note:SetText(dateOnly and "|cff888888Everyone's addon is told the new date. Tickets already bought still count.|r"
+        or "|cff888888Only one lottery at a time. It stays quiet until you click Announce.|r")
 end
 
 function LUI.ShowForm()
@@ -578,7 +599,25 @@ function LUI.ShowForm()
     local L = ns.Lottery.Current()
     if L and L.state == "open" then ns.Print("A lottery is already running - only one at a time.") return end
     if not form then BuildForm() end
+    FormMode(false)
     if not form.pot and L then LUI.SetPot(L.pot) end -- default: last time's pot holder
+    RefreshForm()
+    form:Show()
+end
+
+--- The creator: the same form, just the draw day and time.
+function LUI.ShowDateForm()
+    local Lot = ns.Lottery
+    local L = Lot.Current()
+    if not L or L.state ~= "open" then ns.Print("There's no running lottery to change.") return end
+    if not ns.IsMe(L.by) then ns.Print("Only %s, who opened this lottery, can change its date.", ns.Short(L.by)) return end
+    if not form then BuildForm() end
+    FormMode(true)
+    -- start from the current draw time
+    local bne = date("!*t", L.drawAt + Lot.BRISBANE)
+    form.day = math.max(0, math.floor((L.drawAt + Lot.BRISBANE) / 86400) - math.floor((Lot.Now() + Lot.BRISBANE) / 86400))
+    form.hour:SetText(("%02d"):format(bne.hour))
+    form.minute:SetText(("%02d"):format(bne.min))
     RefreshForm()
     form:Show()
 end

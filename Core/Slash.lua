@@ -26,7 +26,7 @@ local HELP = {
     "/gg dnd - do not disturb: turn down every incoming challenge (again to turn it off)",
     "/gg gmute - stop posting your wins in guild chat (again to turn it back on)",
     "/gg remind - who owes whom, now | /gg remind on|off - the reminder at login",
-    "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|draw|close",
+    "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|date|draw|close",
     "Right-click a guildie (chat name, portrait, guild list) > Challenge - uses the wager on the Play tab",
     "After a game: Rematch or Double or nothing | Live tab: back a player with a side bet",
     "/gg sound on|off - sound effects | /gg options - the settings page (Options > AddOns)",
@@ -249,6 +249,7 @@ commands.lottery = function(action, n)
     elseif action == "check" then ns.Lottery.Check()
     elseif action == "announce" then ns.Lottery.Announce()
     elseif action == "close" then ns.Lottery.Close()
+    elseif action == "date" then ns.LotteryUI.ShowDateForm()
     else ns.UI.ShowLottery() end
 end
 commands.lotto = commands.lottery

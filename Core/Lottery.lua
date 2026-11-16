@@ -183,7 +183,16 @@ end
 ---------------------------------------------------------------------------
 local function NewFields(L)
     return { id = L.id, by = L.by, p = L.pot, c = L.price, m = L.max, d = L.drawAt, t = L.created,
-        a = L.announced and 1 or nil }
+        a = L.announced and 1 or nil, dr = (L.dateRev or 0) > 0 and L.dateRev or nil }
+end
+
+--- A newer draw date (higher revision) than ours: take it. Returns true if it changed.
+local function TakeDate(L, drawAt, rev)
+    drawAt, rev = tonumber(drawAt), tonumber(rev) or 0
+    if not drawAt or L.state ~= "open" or rev <= (L.dateRev or 0) then return false end
+    local old = L.drawAt
+    L.drawAt, L.dateRev = drawAt, rev
+    return old ~= drawAt
 end
 
 local function Batches(list, fn)
@@ -258,6 +267,7 @@ local function Adopt(f)
     if data.closed and data.closed[f.id] then return nil end -- closed by its creator: gone for good
     if L and L.id == f.id then
         if f.a == "1" then L.announced = true end
+        TakeDate(L, f.d, f.dr) -- (passed on by someone who heard about a date change we missed)
         return L
     end
     if L then
@@ -274,7 +284,8 @@ local function Adopt(f)
     end
     KeepPrevious(data, L)
     L = Fresh({ id = f.id, by = ns.Full(f.by), pot = ns.Full(f.p), price = tonumber(f.c) or 0, max = tonumber(f.m) or 1,
-        drawAt = tonumber(f.d) or 0, created = created, state = "open", announced = f.a == "1" })
+        drawAt = tonumber(f.d) or 0, created = created, state = "open", announced = f.a == "1",
+        dateRev = tonumber(f.dr) or 0 })
     data.cur = L
     return L
 end
@@ -438,6 +449,38 @@ function Lottery.Announce()
             ns.Money(L.price), L.max, Lottery.When(L.drawAt)), "GUILD")
     end
     ns.Log("Lottery announced - ticket sales are open.")
+    Changed()
+    return true
+end
+
+-- the creator moved the draw
+Comm.On("LOT_DATE", function(f, sender)
+    local L = Lottery.Current()
+    if not L or L.id ~= f.id or not ns.SameName(sender, L.by) then return end
+    if TakeDate(L, f.d, f.dr) then
+        ns.Log("|cffffd100The guild lottery's draw has moved to %s|r (by %s). Tickets you've bought still count.",
+            Lottery.When(L.drawAt), ns.Short(sender))
+    end
+    Changed()
+end)
+
+--- The creator: move the draw (earlier or later). Tickets already bought keep counting.
+function Lottery.ChangeDate(drawAt)
+    local L = Lottery.Current()
+    drawAt = math.floor(tonumber(drawAt) or 0)
+    if not L or L.state ~= "open" then ns.Print("There's no running lottery to change.") return false end
+    if not ns.IsMe(L.by) then ns.Print("Only %s, who opened this lottery, can change its date.", ns.Short(L.by)) return false end
+    if Lottery.drawing then ns.Print("The draw is happening right now.") return false end
+    if drawAt - Lottery.SALES_CLOSE <= Now() + 60 then
+        ns.Print("The draw has to be more than 1h15m away (ticket sales close 1h15m before it).") return false
+    end
+    if drawAt == L.drawAt then ns.Print("That's already the draw time.") return false end
+    L.drawAt, L.dateRev = drawAt, (L.dateRev or 0) + 1
+    Comm.Send("LOT_DATE", { id = L.id, d = L.drawAt, dr = L.dateRev }, nil)
+    ns.Log("Lottery draw moved to %s. Ticket sales close at %s.%s", Lottery.When(L.drawAt),
+        date("!%H:%M", Lottery.SalesClose(L) + Lottery.BRISBANE),
+        L.announced and " Click Announce again if you want to post the new date in guild chat." or "")
+    if L.announcedAt then L.announcedAt = nil end -- (so the new date can be announced straight away)
     Changed()
     return true
 end
