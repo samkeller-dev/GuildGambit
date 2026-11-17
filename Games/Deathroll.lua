@@ -496,6 +496,8 @@ GDR.MAX_PLAYERS = 10
 GDR.LOBBY_TIMEOUT = 300 -- an unstarted room closes after 5 minutes
 GDR.TURN_TIMEOUT = 90   -- not rolling for this long knocks you out
 GDR.START_RESEND = 3    -- the host repeats "started" a couple of times in case one is lost
+GDR.SYNC_WAIT = 4       -- seconds before trusting someone else's view of the game over ours
+GDR.STALE = 300         -- nothing happening for this long: our addon has lost the game, drop it
 
 local GroupTurn
 
@@ -540,6 +542,13 @@ local function NamesText(list)
     local out = {}
     for _, n in ipairs(list) do out[#out + 1] = ns.IsMe(n) and "you" or ns.Short(n) end
     return table.concat(out, ", ")
+end
+
+--- Tells the room where the game stands after a turn change, so an addon that missed a roll
+--- (or a kick) catches up instead of waiting forever for a roll that already happened.
+local function SyncState(game)
+    if game.state ~= "play" then return end
+    SendAll(game, "GDR_TURN", { id = game.id, k = game.n, i = game.turnIdx, m = game.max, a = Names(game.alive) })
 end
 
 local function UpdateLobbyStatus(game)
@@ -713,6 +722,11 @@ local function OnGroupRoll(game, roller, v, verified)
     GroupTurn(game)
 end
 
+--- Our own roll was counted: tell the room the new state (the roller's addon always saw it).
+local function AfterMyRoll(game)
+    if Games.Get(game.id) == game then SyncState(game) end
+end
+
 function GroupTurn(game)
     game.n = game.n + 1
     local roller, max, step = game.alive[game.turnIdx], game.max, game.n
@@ -722,7 +736,10 @@ function GroupTurn(game)
     Rolls.Watch({
         player = roller, min = 1, max = max, key = game.id .. ":" .. step,
         relayTo = ns.IsMe(roller) and others or nil,
-        onRoll = function(v, verified) OnGroupRoll(game, roller, v, verified) end,
+        onRoll = function(v, verified)
+            OnGroupRoll(game, roller, v, verified)
+            if ns.IsMe(roller) then AfterMyRoll(game) end
+        end,
     })
     if ns.IsMe(roller) then
         ns.Sound("turn")
@@ -743,6 +760,15 @@ function GroupTurn(game)
         if not (judge and ns.IsMe(judge)) then return end
         SendAll(game, "GDR_KICK", { id = game.id, w = ns.Full(roller), k = step })
         KnockOut(game, roller, "took too long to roll", false)
+        if Games.Get(game.id) == game then SyncState(game) end
+    end)
+    -- nothing at all for minutes (everyone's addon gone quiet, or ours lost track): let go,
+    -- so the addon isn't stuck in a game that's over
+    C_Timer.After(GDR.STALE, function()
+        if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
+        ns.Log("|cffff8040Lost track of the group deathroll|r - nothing happened for %d minutes, so it's been dropped (no result recorded). Check the result with the others.",
+            GDR.STALE / 60)
+        Games.Remove(game)
     end)
 end
 
@@ -891,9 +917,44 @@ Comm.On("GDR_KICK", function(f, sender)
     end
 end)
 
-Comm.On("GDR_END", function(f, sender)
+-- someone's view of the game after a turn change: if ours is behind (or disagrees at the same
+-- step), we missed something - take theirs
+local function TakeTurnState(f, sender)
     local game = MyRoom(f.id)
     if not game or game.state ~= "play" or not IndexOf(game.players, sender) then return end
+    local k, i, m = tonumber(f.k), tonumber(f.i), tonumber(f.m)
+    local alive = ParseNames(f.a)
+    if not k or not i or not m or k < game.n or #alive < 2 or i < 1 or i > #alive or m < 2 or m > game.start then return end
+    for _, n in ipairs(alive) do if not IndexOf(game.players, n) then return end end
+    local same = k == game.n and game.max == m and #alive == #(game.alive or {})
+        and ns.SameName(game.alive[game.turnIdx] or "", alive[i])
+    if same then return end
+    Rolls.UnwatchPrefix(game.id .. ":")
+    -- keep our own spelling of our name in the list
+    for j, n in ipairs(alive) do
+        local mine = IndexOf(game.players, n)
+        alive[j] = game.players[mine]
+    end
+    for _, n in ipairs(game.alive or {}) do
+        if not IndexOf(alive, n) and not IndexOf(game.out, n) then game.out[#game.out + 1] = n end
+    end
+    game.alive, game.turnIdx, game.max, game.n = alive, i, m, k - 1
+    if not IndexOf(alive, ns.Me()) and not game.iAmOut then
+        game.iAmOut = true
+        ns.UI.SetRollPrompt(nil)
+    end
+    ns.Log("Your addon missed part of the group deathroll - caught up from %s.", ns.Short(sender))
+    GroupTurn(game)
+end
+
+Comm.On("GDR_TURN", function(f, sender)
+    -- (give the roll itself a moment to arrive the normal way first)
+    C_Timer.After(GDR.SYNC_WAIT, function() TakeTurnState(f, sender) end)
+end)
+
+Comm.On("GDR_END", function(f, sender)
+    local game = MyRoom(f.id)
+    if not game or (game.state ~= "play" and game.state ~= "lobby") or not IndexOf(game.players, sender) then return end
     local i = IndexOf(game.players, f.w)
     if not i then return end
     local winner = game.players[i]

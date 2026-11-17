@@ -5,6 +5,11 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.1.3 - 2026-11-18
+
+- **Group deathroll: no more stuck players.** If a player's addon misses a roll (out of range, or a lost message), it now catches up from the others within a few seconds instead of waiting forever, so it can roll when its turn comes. An addon that missed the start still gets the result.
+- If a group deathroll goes completely quiet for 5 minutes, the addon drops it (no result recorded), so the buttons can't stay greyed out. Until everyone updates, `/reload` (or `/gg cancel` twice) frees a stuck player.
+
 ## 2.1.2 - 2026-11-17
 
 - **Lottery pot fixes:** taking the gold out of a ticket mail no longer counts it twice behind the scenes. The pot character's addon puts the old totals right for everyone the next time it opens the mailbox. A ticket mail taken before the addon had read the inbox is no longer missed, and a mail from a short spelling of a buyer's name (like "Eoka" for "Eoka Pistol") counts for them.
