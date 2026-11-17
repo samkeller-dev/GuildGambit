@@ -26,7 +26,7 @@ local HELP = {
     "/gg dnd - do not disturb: turn down every incoming challenge (again to turn it off)",
     "/gg gmute - stop posting your wins in guild chat (again to turn it back on)",
     "/gg remind - who owes whom, now | /gg remind on|off - the reminder at login",
-    "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|date|draw|close",
+    "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|date|draw|close | the pot: /gg lottery confirm|unconfirm <name>",
     "Right-click a guildie (chat name, portrait, guild list) > Challenge - uses the wager on the Play tab",
     "After a game: Rematch or Double or nothing | Live tab: back a player with a side bet",
     "/gg sound on|off - sound effects | /gg options - the settings page (Options > AddOns)",
@@ -241,8 +241,9 @@ end
 commands.options = function() ns.Options.Open() end
 
 -- "/gg lottery": the lottery page; "/gg lottery buy 2" at a mailbox; officers: draw / cancel
-commands.lottery = function(action, n)
+commands.lottery = function(action, n, ...)
     action = (action or ""):lower()
+    local who = table.concat({ n or "", ... }, " "):gsub("^%s+", ""):gsub("%s+$", "")
     if action == "buy" then ns.Lottery.Buy(tonumber(n) or 1)
     elseif action == "draw" then ns.Lottery.Draw()
     elseif action == "paid" then ns.Lottery.MarkPaid("winner")
@@ -250,6 +251,8 @@ commands.lottery = function(action, n)
     elseif action == "announce" then ns.Lottery.Announce()
     elseif action == "close" then ns.Lottery.Close()
     elseif action == "date" then ns.LotteryUI.ShowDateForm()
+    elseif action == "confirm" then ns.Lottery.Confirm(who ~= "" and who or nil)
+    elseif action == "unconfirm" then ns.Lottery.Confirm(who ~= "" and who or nil, true)
     else ns.UI.ShowLottery() end
 end
 commands.lotto = commands.lottery

@@ -5,6 +5,13 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.1.2 - 2026-11-17
+
+- **Lottery pot fixes:** taking the gold out of a ticket mail no longer counts it twice behind the scenes. The pot character's addon puts the old totals right for everyone the next time it opens the mailbox. A ticket mail taken before the addon had read the inbox is no longer missed, and a mail from a short spelling of a buyer's name (like "Eoka" for "Eoka Pistol") counts for them.
+- **Confirm gold by hand:** if the addon ever misses someone's ticket gold, the pot character can click that player's row on the lottery page (or `/gg lottery confirm <name>`) to mark it received. Click again (or `/gg lottery unconfirm <name>`) to take it back. If the mail turns up later, it isn't counted twice. Gold mail from a guildie that isn't a ticket mail is pointed out on the pot character's lottery page.
+- **Buying tickets is safer:** your tickets only count once the gold has actually left your bags. Before, a mail the game reported as "sent" counted even if the gold never went with it. While the mailbox is open, the lottery page reminds you to keep it open until your tickets are confirmed in chat.
+- `/gg lottery check` on the pot character lists every mail with gold on it, as the game reports it.
+
 ## 2.1.1 - 2026-11-17
 
 - No more "X has an outdated GuildGambit" line for every guildie on an old version when you log in. You're told only if you try to play them (and the opponent list marks them). If your own version is the old one, you're told once per session.

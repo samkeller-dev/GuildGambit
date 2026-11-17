@@ -209,8 +209,18 @@ function LUI.Build(p)
     end)
     view.rows = {}
     for i = 1, ROWS do
-        local r = CreateFrame("Frame", nil, view.listArea)
+        local r = CreateFrame("Button", nil, view.listArea)
         r:SetSize(244, ROW_H)
+        -- the pot character clicks a row to confirm (or take back) that player's gold by hand
+        r:SetScript("OnClick", function(self) LUI.ConfirmRow(self.entry) end)
+        r:SetScript("OnEnter", function(self)
+            if not self.canConfirm or not GameTooltip then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.entry.manual and "Click to take back your confirmation"
+                or (self.entry.verified and "Their gold has arrived" or "Click to confirm their gold arrived (if the addon missed the mail)"))
+            GameTooltip:Show()
+        end)
+        r:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
         r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
         r.name = Label(r, "", "GameFontHighlightSmall")
         r.name:SetPoint("LEFT", 0, 0)
@@ -357,7 +367,9 @@ function LUI.Refresh()
             r.name:SetText(name)
             r.n:SetText(tostring(e.n))
             r.stake:SetText(ns.Money(e.stake))
-            r.paid:SetText(e.verified and "|cff20ff20received|r" or (e.received > 0 and "|cffffd100part|r" or "|cff888888in mail|r"))
+            r.paid:SetText(e.manual and "|cff20ff20confirmed|r" or (e.verified and "|cff20ff20received|r"
+                or (e.received > 0 and "|cffffd100part|r" or "|cff888888in mail|r")))
+            r.entry, r.canConfirm = e, ns.IsMe(L.pot) and (L.state == "open" or L.state == "drawn")
         end
     end
     view.empty:SetShown(#players == 0)
@@ -376,12 +388,18 @@ function LUI.Refresh()
         if canBuy then view.buy:Enable() else view.buy:Disable() end
         if mine >= L.max then hint = "You have the most tickets allowed."
         elseif Lot.Busy() then hint = "Sending..."
-        elseif not Lot.MailOpen() then hint = "Open a mailbox to buy - the gold is mailed to " .. ns.Short(L.pot) .. "." end
+        elseif not Lot.MailOpen() then hint = "Open a mailbox to buy - the gold is mailed to " .. ns.Short(L.pot) .. "."
+        else hint = "|cffffd100Keep the mailbox open until you see \"Bought ... tickets\" in chat.|r" end
     elseif L.state == "open" and not L.announced then
         hint = ns.IsMe(L.by) and "Not announced yet - check the details, then click Announce to open ticket sales."
             or ("Ticket sales open once " .. ns.Short(L.by) .. " announces it.")
     elseif L.state == "open" and ns.IsMe(L.pot) then
-        hint = "You hold the pot - open your mailbox now and then so every paid ticket is counted."
+        hint = "You hold the pot - open your mailbox now and then. If the addon misses someone's gold, click their row to confirm it."
+        local other = L.otherMail and L.otherMail[1]
+        if other then
+            hint = ("In your mailbox: %s from %s that isn't a ticket mail. If it's for tickets, click their row to confirm it."):format(
+                ns.Money(other.money), ns.Short(other.from))
+        end
     elseif L.state == "open" then
         hint = "Ticket sales have closed."
     end
@@ -594,6 +612,20 @@ local function FormMode(dateOnly)
     form.create:SetText(dateOnly and "Save date" or "Open lottery")
     form.note:SetText(dateOnly and "|cff888888Everyone's addon is told the new date. Tickets already bought still count.|r"
         or "|cff888888Only one lottery at a time. It stays quiet until you click Announce.|r")
+end
+
+--- The pot character clicked a player's row.
+function LUI.ConfirmRow(e)
+    local L = ns.Lottery.Current()
+    if not e or not L or not ns.IsMe(L.pot) or (L.state ~= "open" and L.state ~= "drawn") then return end
+    if e.manual then
+        ns.UI.ShowInvite(("Take back your confirmation of %s's gold?"):format(ns.Short(e.name)),
+            function() ns.Lottery.Confirm(e.name, true) end, function() end)
+    elseif not e.verified then
+        ns.UI.ShowInvite(("Confirm %s's %s for %d ticket%s arrived? Only do this if the gold is in your bags."):format(
+            ns.Short(e.name), ns.Money(e.stake), e.n, e.n == 1 and "" or "s"),
+            function() ns.Lottery.Confirm(e.name) end, function() end)
+    end
 end
 
 function LUI.ShowForm()

@@ -57,6 +57,7 @@ end
 -- the wealth chart: our gold or level changed
 function events.PLAYER_MONEY(...)
     ns.Wealth.Changed()
+    ns.Lottery.OnMoney()
     return ns.Payments.PLAYER_MONEY(...) -- (this table wins over Payments' own handler)
 end
 function events.PLAYER_LEVEL_UP() ns.Wealth.Changed() end

@@ -32,6 +32,7 @@ Lottery.TAKEOVER = 3 * 86400     -- after the draw time + this, any officer may 
 Lottery.SYNC_WAIT = 5            -- seconds the drawer waits for everyone's tickets
 Lottery.ROLL_TIMEOUT = 30        -- seconds to see the draw's roll before giving up
 Lottery.MAIL_WAIT = 8            -- seconds before saying the mail is taking a while
+Lottery.MONEY_WAIT = 5           -- seconds after "mail sent" for the gold to leave our bags
 Lottery.BRISBANE = 10 * 3600     -- UTC+10, no daylight saving
 
 local function Now() return (GetServerTime and GetServerTime()) or time() end
@@ -87,6 +88,7 @@ function Lottery.Previous() return Lottery.Data().prev end
 
 local function Fresh(L)
     L.tickets, L.received, L.collected, L.inbox = L.tickets or {}, L.received or {}, L.collected or {}, L.inbox or {}
+    L.taking, L.manual = L.taking or {}, L.manual or {} -- (pot character only)
     return L
 end
 
@@ -114,7 +116,8 @@ function Lottery.Players(L)
         if n > 0 then
             local received = L.received[name] or 0
             out[#out + 1] = { name = name, n = n, stake = n * L.price, received = received,
-                verified = received >= n * L.price }
+                verified = received >= n * L.price,
+                manual = (L.manual[name] or 0) > (L.collected[name] or 0) + (L.inbox[name] or 0) }
         end
     end
     table.sort(out, function(a, b)
@@ -216,8 +219,10 @@ local function SendReceipts(L, target) -- the pot character only
     local items = {}
     for name, g in pairs(L.received) do if g > 0 then items[#items + 1] = name .. ":" .. g end end
     table.sort(items)
-    Batches(items, function(_, _, part) Comm.Send("LOT_RCV", { id = L.id, b = part, ck = L.potChecked }, target) end)
-    if #items == 0 and L.potChecked then Comm.Send("LOT_RCV", { id = L.id, b = "", ck = L.potChecked }, target) end
+    -- rr: receipts revision - a higher one replaces everyone's copy (after a correction)
+    local rr = (L.rcvRev or 0) > 0 and L.rcvRev or nil
+    Batches(items, function(_, _, part) Comm.Send("LOT_RCV", { id = L.id, b = part, ck = L.potChecked, rr = rr }, target) end)
+    if #items == 0 and (L.potChecked or rr) then Comm.Send("LOT_RCV", { id = L.id, b = "", ck = L.potChecked, rr = rr }, target) end
 end
 
 local function SendResult(L, target)
@@ -391,6 +396,9 @@ Comm.On("LOT_RCV", function(f, sender)
     local L = Lottery.Current()
     if not L or L.id ~= f.id or not ns.SameName(sender, L.pot) then return end
     Fresh(L)
+    local rr = tonumber(f.rr) or 0
+    if rr < (L.rcvRev or 0) then return end -- from before a correction
+    if rr > (L.rcvRev or 0) then L.received, L.rcvRev = {}, rr end -- corrected: start again from these
     for name, g in (f.b or ""):gmatch("([^:;]+):(%d+)") do Merge(L.received, name, g) end
     local ck = tonumber(f.ck)
     if ck and ck > (L.potChecked or 0) then L.potChecked = ck end
@@ -735,7 +743,9 @@ local function Call(fn, ...)
 end
 
 function Lottery.MailOpen() return ns.MailPay and ns.MailPay.open or false end
-function Lottery.Busy() return Lottery.sending ~= nil or (ns.MailPay and ns.MailPay.Busy()) end
+function Lottery.Busy()
+    return Lottery.sending ~= nil or Lottery.confirming ~= nil or (ns.MailPay and ns.MailPay.Busy())
+end
 
 function Lottery.Buy(n)
     local L = Lottery.Current()
@@ -757,7 +767,7 @@ function Lottery.Buy(n)
     end
     Call(ClearSendMail)
     if Call(SetSendMailMoney, amount) == false then ns.Print("Couldn't put %s on the mail.", ns.Money(amount)) return false end
-    local job = { to = L.pot, amount = amount, n = n, id = L.id, had = mine }
+    local job = { to = L.pot, amount = amount, n = n, id = L.id, had = mine, before = tonumber(Call(GetMoney)) }
     Lottery.sending = job
     local ok, err = pcall(SendMail, L.pot, Lottery.SUBJECT .. L.id,
         ("%d GuildGambit lottery ticket%s (%s each), drawn %s."):format(n, n == 1 and "" or "s",
@@ -771,15 +781,49 @@ function Lottery.Buy(n)
     C_Timer.After(Lottery.MAIL_WAIT, function()
         if Lottery.sending == job then ns.Print("Waiting for the game to confirm your ticket mail...") end
     end)
+    ns.Print("Mailing %s to %s - keep the mailbox open until your tickets are confirmed.", ns.Money(amount), ns.Short(L.pot))
     Changed()
     return true
 end
 
---- MAIL_SEND_SUCCESS (from MailPay): true if it was our ticket mail.
+--- True once the ticket gold has left our bags.
+local function GoldLeft(job)
+    local now = tonumber(Call(GetMoney))
+    if not job.before or not now then return true end -- (can't tell: trust the game's "sent")
+    return job.before - now >= job.amount
+end
+
+local Claim
+
+--- MAIL_SEND_SUCCESS (from MailPay): true if it was our ticket mail. The tickets only count
+--- once the gold has actually left our bags (a "sent" mail without the gold buys nothing).
 function Lottery.OnMailSent()
     local job = Lottery.sending
     if not job then return false end
     Lottery.sending = nil
+    if GoldLeft(job) then Claim(job) return true end
+    Lottery.confirming = job
+    C_Timer.After(Lottery.MONEY_WAIT, function()
+        if Lottery.confirming ~= job then return end
+        Lottery.confirming = nil
+        ns.Log("|cffff8040Your ticket mail was sent, but the %s didn't leave your bags|r - no tickets were bought. Check your gold and try again. (If the gold did go, your tickets count once %s's mailbox gets it.)",
+            ns.Money(job.amount), ns.Short(job.to))
+        Changed()
+    end)
+    Changed()
+    return true
+end
+
+--- PLAYER_MONEY: the gold for a sent ticket mail has left our bags.
+function Lottery.OnMoney()
+    local job = Lottery.confirming
+    if job and GoldLeft(job) then
+        Lottery.confirming = nil
+        Claim(job)
+    end
+end
+
+Claim = function(job)
     local L = Lottery.Current()
     if L and L.id == job.id then
         Fresh(L)
@@ -791,7 +835,6 @@ function Lottery.OnMailSent()
         ns.Sound("coin")
     end
     Changed()
-    return true
 end
 
 function Lottery.OnMailFailed()
@@ -816,18 +859,73 @@ end
 ---------------------------------------------------------------------------
 -- The pot character's mailbox: who has actually sent gold
 ---------------------------------------------------------------------------
-local inboxCache = {} -- inbox index -> { sender, money } for this lottery's ticket mail
-
---- Recomputes received = collected + still in the inbox, and shares any change.
-local function Recount(L)
-    local names, changed = {}, false
-    for n in pairs(L.collected) do names[n] = true end
-    for n in pairs(L.inbox) do names[n] = true end
-    for n in pairs(names) do
-        local total = (L.collected[n] or 0) + (L.inbox[n] or 0)
-        if total > (L.received[n] or 0) then L.received[n] = total changed = true end
+--- A ticket mail's sender, matched to the name they bought under (Forever sometimes gives
+--- only the first part of a name, like "Eoka" for "Eoka Pistol").
+local function Buyer(L, sender)
+    local full = ns.Full(sender)
+    if not full or L.tickets[full] or L.received[full] then return full end
+    local key = full:lower()
+    for name in pairs(L.tickets) do
+        local first = name:lower():match("^(%S+)")
+        if name:lower() == key or (first == key and name:find(" ")) then return name end
     end
+    return full
+end
+
+--- One inbox mail with gold on it: { sender, money, subject, ticket = true if it's for this lottery }.
+local function ReadMail(L, i)
+    local ok, _, _, sender, subject, money = pcall(GetInboxHeaderInfo, i)
+    if not ok then return nil end
+    sender, subject, money = Compat.Safe(sender), Compat.Safe(subject), tonumber(Compat.Safe(money)) or 0
+    if not sender or money <= 0 then return nil end
+    local ticket = subject == Lottery.SUBJECT .. L.id
+    return { sender = ticket and Buyer(L, sender) or ns.Full(sender), money = money, subject = subject or "",
+        ticket = ticket }
+end
+
+--- Recomputes received = collected + still in the inbox (or confirmed by hand). Normally it only
+--- grows; rebuild = true starts again from these (after a correction).
+local function Recount(L, rebuild)
+    local names, changed = {}, false
+    for _, t in ipairs({ L.collected, L.inbox, L.manual, rebuild and L.received or {} }) do
+        for n in pairs(t) do names[n] = true end
+    end
+    for n in pairs(names) do
+        -- (a hand confirmation covers their stake; if the mail turns up later it isn't counted twice)
+        local total = math.max((L.collected[n] or 0) + (L.inbox[n] or 0), L.manual[n] or 0)
+        if total > (L.received[n] or 0) or (rebuild and total ~= (L.received[n] or 0)) then
+            L.received[n] = total > 0 and total or nil
+            changed = true
+        end
+    end
+    if rebuild then L.rcvRev = (L.rcvRev or 0) + 1 end
     return changed
+end
+
+--- Reads the inbox: ticket gold still waiting, and any other gold mail (shown to the pot character).
+local function ReadInbox(L)
+    local seen, others = {}, {}
+    local count = tonumber(Call(GetInboxNumItems)) or 0
+    for i = 1, count do
+        local m = ReadMail(L, i)
+        if m and m.ticket then
+            seen[m.sender] = (seen[m.sender] or 0) + m.money
+        elseif m and (L.tickets[m.sender] or (ns.Guild.IsMember and ns.Guild.IsMember(m.sender))) then
+            -- (a guildie's gold mail without the ticket subject - shown, in case it's for tickets)
+            others[#others + 1] = { from = m.sender, money = m.money, subject = m.subject }
+        end
+    end
+    -- gold we've just taken can still show on its mail for a moment: don't count it twice
+    L.inbox = {}
+    for name, g in pairs(seen) do
+        local taking = math.min(L.taking[name] or 0, g)
+        if g - taking > 0 then L.inbox[name] = g - taking end
+    end
+    for name, t in pairs(L.taking) do
+        local left = math.min(t, seen[name] or 0)
+        L.taking[name] = left > 0 and left or nil
+    end
+    L.otherMail = others
 end
 
 --- MAIL_INBOX_UPDATE on the pot character.
@@ -835,36 +933,65 @@ function Lottery.ScanInbox()
     local L = Lottery.Current()
     if not L or not ns.IsMe(L.pot) then return end
     Fresh(L)
-    local want = Lottery.SUBJECT .. L.id
-    inboxCache, L.inbox = {}, {}
-    local count = tonumber(Call(GetInboxNumItems)) or 0
-    for i = 1, count do
-        local ok, _, _, sender, subject, money = pcall(GetInboxHeaderInfo, i)
-        sender, subject, money = Compat.Safe(sender), Compat.Safe(subject), tonumber(Compat.Safe(money)) or 0
-        if ok and sender and subject == want and money > 0 then
-            sender = ns.Full(sender)
-            inboxCache[i] = { sender = sender, money = money }
-            L.inbox[sender] = (L.inbox[sender] or 0) + money
-        end
-    end
+    ReadInbox(L)
     L.potChecked = Now()
-    Recount(L)
+    -- 2.1.2: taken gold used to be counted twice - put the totals right, once, for everyone
+    Recount(L, not L.rcvFixed)
+    L.rcvFixed = true
     if L.state == "drawn" then CheckMissed(L) end
     SendReceipts(L, nil)
     Changed()
 end
 
---- Taking a ticket mail's gold (hooked): it moves from "in the inbox" to "collected".
+--- Taking gold from a mail (hooked): if it's ticket gold, it moves from "in the inbox" to
+--- "collected". The mail is read right now (not from an earlier scan), so it can't be missed
+--- or mixed up with another mail.
 function Lottery.OnTakeMoney(index)
-    local m = inboxCache[index]
     local L = Lottery.Current()
-    if not m or not L or not ns.IsMe(L.pot) then return end
-    inboxCache[index] = nil
+    if not L or not ns.IsMe(L.pot) then return end
     Fresh(L)
+    local m = ReadMail(L, index)
+    if not m or not m.ticket then return end
+    ReadInbox(L)
+    if (L.inbox[m.sender] or 0) < m.money then return end -- (already being taken)
     L.collected[m.sender] = (L.collected[m.sender] or 0) + m.money
-    L.inbox[m.sender] = math.max(0, (L.inbox[m.sender] or 0) - m.money)
+    L.taking[m.sender] = (L.taking[m.sender] or 0) + m.money
+    L.inbox[m.sender] = (L.inbox[m.sender] or 0) - m.money
+    if L.inbox[m.sender] <= 0 then L.inbox[m.sender] = nil end
+    L.potChecked = Now()
     Recount(L)
+    SendReceipts(L, nil)
     Changed()
+end
+
+--- The pot character: confirm by hand that a player's ticket gold arrived (if the mailbox
+--- reading ever misses it). Covers their tickets in full; undo = true takes it back.
+function Lottery.Confirm(name, undo)
+    local L = Lottery.Current()
+    if not L or (L.state ~= "open" and L.state ~= "drawn") then ns.Print("There's no lottery to confirm gold for.") return false end
+    if not ns.IsMe(L.pot) then ns.Print("Only %s, who holds the pot, can confirm gold.", ns.Short(L.pot)) return false end
+    Fresh(L)
+    name = name and ns.Full(name)
+    if not name then ns.Print("Whose gold?") return false end
+    for n in pairs(L.tickets) do if ns.SameName(n, name) then name = n end end
+    if undo then
+        if not L.manual[name] then ns.Print("%s's gold wasn't confirmed by hand.", ns.Short(name)) return false end
+        L.manual[name] = nil
+        ns.Log("Lottery: took back the hand confirmation of %s's gold.", ns.Short(name))
+    else
+        local stake = Lottery.TicketsOf(L, name) * L.price
+        local seen = (L.collected[name] or 0) + (L.inbox[name] or 0)
+        if stake <= 0 then ns.Print("%s has no tickets.", ns.Short(name)) return false end
+        if seen >= stake then ns.Print("%s's gold has already arrived.", ns.Short(name)) return false end
+        L.manual[name] = stake
+        ns.Log("Lottery: confirmed %s's %s by hand (%d ticket%s).", ns.Short(name), ns.Money(stake),
+            stake / L.price, stake == L.price and "" or "s")
+    end
+    Recount(L, true)
+    if L.state == "drawn" then CheckMissed(L) end
+    SendReceipts(L, nil)
+    Changed()
+    return true
 end
 
 function Lottery.HookMail()
@@ -904,6 +1031,17 @@ function Lottery.Check()
         local n, pot = Lottery.Totals(L)
         ns.Print("  lottery %s: %s, %d tickets, %s pot, pot held by %s, mail last checked %s", L.id, L.state, n,
             ns.Money(pot), ns.Short(L.pot), L.potChecked and Lottery.When(L.potChecked) or "never")
+        if ns.IsMe(L.pot) then -- every mail with gold on it, as the game reports it
+            Fresh(L)
+            local count = tonumber(Call(GetInboxNumItems)) or 0
+            for i = 1, count do
+                local m = ReadMail(L, i)
+                if m then
+                    ns.Print("  mail %d: %s from %s, \"%s\"%s", i, ns.Money(m.money), tostring(m.sender), m.subject,
+                        m.ticket and " |cff20ff20(ticket)|r" or "")
+                end
+            end
+        end
     end
 end
 
