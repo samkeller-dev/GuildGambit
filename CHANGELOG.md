@@ -5,6 +5,14 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.1.5 - 2026-11-18
+
+- **Clearing a debt can't be undone by an old mail any more.** If gold mailed with **Pay debts** was still waiting for the other player to confirm when you cleared everything with them, confirming it afterwards counted it as a new payment and opened the debt again the other way. Clearing now drops mailed gold that's still waiting, and a mail sent before the clear is refused if its popup is answered later. Gold mailed after a clear still counts. A leaderboard reset does the same.
+
+## 2.1.4 - 2026-11-18
+
+- **Spam-clicking Roll no longer rolls twice.** After you click, the Roll button greys out until your roll shows up in chat (or 3 seconds pass, in case it got lost). `/gg roll` and `/gg hit` work the same way. In deathroll the extra roll was already ignored, but in blackjack a fast double-click on Hit could deal you a card you didn't ask for.
+
 ## 2.1.3 - 2026-11-18
 
 - **Group deathroll: no more stuck players.** If a player's addon misses a roll (out of range, or a lost message), it now catches up from the others within a few seconds instead of waiting forever, so it can roll when its turn comes. An addon that missed the start still gets the result.

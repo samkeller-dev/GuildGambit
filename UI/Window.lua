@@ -545,7 +545,7 @@ local function BuildPlay(p)
 
     p.roll = Button(p, "Roll", 120, function()
         if prompt and prompt.action then prompt.action()
-        elseif prompt then ns.Rolls.Roll(prompt.lo, prompt.hi) end
+        elseif prompt then ns.Rolls.Click(prompt.lo, prompt.hi) end
     end)
     p.roll:SetPoint("BOTTOMLEFT", 0, 0)
     p.stand = Button(p, "Stand", 80, function() ns.Blackjack.Stand(ns.Games.Mine()) end)
@@ -1319,7 +1319,8 @@ local function RefreshPlay(p)
     end
     if prompt then
         p.roll:SetText(prompt.label or ("Roll " .. prompt.lo .. "-" .. prompt.hi))
-        p.roll:Enable()
+        -- (one roll per click: greyed out until it shows up in chat)
+        if not prompt.action and ns.Rolls.Waiting(prompt.lo, prompt.hi) then p.roll:Disable() else p.roll:Enable() end
     else
         p.roll:SetText("Roll")
         p.roll:Disable()

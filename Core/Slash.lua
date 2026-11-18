@@ -103,7 +103,7 @@ commands.coinflip = commands.flip
 commands.roll = function()
     local p = ns.UI.GetRollPrompt()
     if p and p.action then p.action()
-    elseif p then ns.Rolls.Roll(p.lo, p.hi)
+    elseif p then ns.Rolls.Click(p.lo, p.hi)
     else ns.Print("Nothing to roll right now.") end
 end
 

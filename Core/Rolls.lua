@@ -120,6 +120,11 @@ function Rolls.OnSystemMessage(msg)
             ns.AddMyName(who, true)
         end
     end
+    local clicked = Rolls.clicked
+    if clicked and clicked.lo == lo and clicked.hi == hi and ns.IsMe(who) then
+        Rolls.clicked = nil -- our roll arrived: the button can roll again
+        if ns.UI then C_Timer.After(0, ns.UI.Refresh) end
+    end
     for _, w in ipairs(Rolls.watchers) do
         local same = ns.SameName(w.player, who) or (ns.IsMe(w.player) and ns.IsMe(who))
         if same and w.min == lo and w.max == hi then
@@ -183,6 +188,24 @@ function Rolls.Roll(lo, hi)
     end
     ns.Print("Type |cffffff00/roll %d-%d|r to roll.", lo, hi)
     return false
+end
+
+--- The Roll button / "/gg roll": one roll per click, however fast the clicks come. Another
+--- roll in the same range waits until ours shows up in chat (or CLICK_LOCK seconds pass, in
+--- case it was lost).
+Rolls.CLICK_LOCK = 3
+
+function Rolls.Waiting(lo, hi)
+    local p = Rolls.clicked
+    return p ~= nil and p.lo == lo and p.hi == hi and GetTime() - p.t < Rolls.CLICK_LOCK
+end
+
+function Rolls.Click(lo, hi)
+    if Rolls.Waiting(lo, hi) then return false end
+    Rolls.clicked = { lo = lo, hi = hi, t = GetTime() }
+    C_Timer.After(Rolls.CLICK_LOCK + 0.1, function() if ns.UI then ns.UI.Refresh() end end)
+    if ns.UI then ns.UI.Refresh() end
+    return Rolls.Roll(lo, hi)
 end
 
 function Rolls.Reset()

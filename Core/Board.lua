@@ -50,6 +50,8 @@ function Board.ApplySeason(t, password)
             e.clearedByReset = t
         end
     end
+    ns.charDB.clearedAll = ns.Ledger.Now()
+    ns.Ledger.DropPendingMail(nil)
     Board.Changed() -- re-adds our own (now empty) row and re-broadcasts it
     return true
 end

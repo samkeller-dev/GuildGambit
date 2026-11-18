@@ -69,6 +69,27 @@ function Ledger.SettleIfSquare(opponent)
     return true
 end
 
+--- Server time (the same on both players' clients), for comparing one side's stamps with the other's.
+local function Now() return (GetServerTime and GetServerTime()) or time() end
+Ledger.Now = Now
+
+--- When everything with name was last cleared (by hand or by a season reset), or 0.
+function Ledger.ClearedAt(name)
+    local at = ns.charDB.clearedAt and ns.charDB.clearedAt[ns.Full(name)] or 0
+    return math.max(at, ns.charDB.clearedAll or 0)
+end
+
+--- Clearing wipes the slate, including gold mailed before it that wasn't confirmed yet:
+--- otherwise that confirmation arrives later and opens the debt again the other way.
+local function DropPendingMail(name)
+    local pending = ns.charDB.pendingPays
+    if not pending then return end
+    for id, r in pairs(pending) do
+        if not name or ns.SameName(r.to, name) then pending[id] = nil end
+    end
+end
+Ledger.DropPendingMail = DropPendingMail
+
 --- Marks everything with opponent as settled regardless of balance (forgive / clear).
 function Ledger.Settle(opponent)
     opponent = ns.Full(opponent)
@@ -76,6 +97,9 @@ function Ledger.Settle(opponent)
     for _, e in ipairs(ns.charDB.ledger) do
         if e.opponent == opponent then e.settled = true end
     end
+    ns.charDB.clearedAt = ns.charDB.clearedAt or {}
+    ns.charDB.clearedAt[opponent] = Now()
+    DropPendingMail(opponent)
     return sum
 end
 
@@ -192,7 +216,7 @@ end
 
 local function Ask(id, r)
     r.asked = time()
-    ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, v = r.via }, r.to)
+    ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, v = r.via, t = r.t }, r.to)
 end
 
 --- Asks name's addon to confirm a payment (kind "paid" / "received") or clearing all debts
@@ -206,7 +230,7 @@ function Ledger.Request(kind, name, copper, via)
     if kind ~= "settle" and copper <= 0 then return false end
     local id = ns.NewId()
     if via == "mail" then
-        local r = { to = name, copper = copper, kind = kind, via = via }
+        local r = { to = name, copper = copper, kind = kind, via = via, t = Now() }
         Ledger.Pending()[id] = r
         Ask(id, r)
         ns.Log("Mailed %s %s. It counts once they confirm - they'll be asked whenever they're online.",
@@ -243,6 +267,10 @@ ns.Comm.On("PAY_REQ", function(f, sender)
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local who = ns.Short(sender)
     local mail = f.v == "mail"
+    -- gold mailed before we cleared everything with them was part of that clear
+    local sentAt = tonumber(f.t)
+    local function Stale() return mail and sentAt ~= nil and sentAt <= Ledger.ClearedAt(sender) end
+    if Stale() then return no("cleared") end
     local text
     if kind == "paid" and mail then
         text = ("%s mailed you %s to pay what they owe. Confirm once it's in your mailbox?"):format(who, ns.Money(copper))
@@ -258,6 +286,10 @@ ns.Comm.On("PAY_REQ", function(f, sender)
     end
     ns.UI.ShowInvite(text, function()
         if Answered()[f.id] then return end
+        if Stale() then -- cleared while the popup was up
+            ns.Log("Not counting %s's mailed %s - you've cleared everything with them since.", who, ns.Money(copper))
+            return no("cleared")
+        end
         Answered()[f.id] = time()
         Apply(KINDS[kind], sender, copper, mail and "mail" or nil)
         ns.Comm.Send("PAY_OK", { id = f.id }, sender)
@@ -277,6 +309,12 @@ ns.Comm.On("PAY_NO", function(f, sender)
     local r = Ledger.requests[f.id] or Ledger.Pending()[f.id]
     if not r or not ns.SameName(r.to, sender) then return end
     Ledger.requests[f.id], Ledger.Pending()[f.id] = nil, nil
+    if f.r == "cleared" then
+        ns.Log("The %s you mailed %s no longer counts - you cleared everything with them after sending it.",
+            ns.Money(r.copper), ns.Short(sender))
+        if ns.UI then ns.UI.Refresh() end
+        return
+    end
     ns.Log("%s didn't confirm that %s (%s) - nothing recorded.%s", ns.Short(sender), MineText(r.kind, r.to, r.copper, r.via),
         f.r or "no reason", r.via == "mail" and " Check with them that the mail arrived." or "")
     if ns.UI then ns.UI.Refresh() end

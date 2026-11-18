@@ -253,7 +253,7 @@ end
 
 function BJ.Hit(game)
     if not BJ.CanAct(game) then return false end
-    return Rolls.Roll(Rules.ROLL_MIN, Rules.ROLL_MAX)
+    return Rolls.Click(Rules.ROLL_MIN, Rules.ROLL_MAX) -- (one card per click, however fast)
 end
 
 function BJ.Stand(game)
