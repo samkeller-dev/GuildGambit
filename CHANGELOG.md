@@ -5,6 +5,13 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.0 - 2026-11-19
+
+- **Kodo Crossing is arcade-only.** It's no longer a gambling game: play it for fun in the Arcade tab, with its high scores on the leaderboard as before. Kodo duels can't be started any more (the Play tab button, `/gg kodo`, the right-click menu and rematch are gone), and a duel invite from an older version is turned down. Past Kodo results stay in your ledger.
+- **Fixed the lottery going back to the old one.** A guildie whose addon had missed a draw kept sharing that lottery as still open, and other addons swapped the new lottery for it (the older one won). Addons now remember which lotteries have been drawn and never take one back, a stuck addon is told the lottery was drawn and catches up, and the draw result clears a copy that missed it. Anyone still on 2.3.0 can stay stuck on the old lottery until they update, but they can no longer spread it.
+- **Side bets are gone.** Spectators can no longer bet on a live game; watching works as before. Side-bet results already in your ledger stay there.
+- **The Draw button turns on by itself.** If you had the lottery page open before the draw time, the Draw button stayed greyed out until something else refreshed the page. It now turns on at the draw time with the page left open.
+
 ## 2.3.0 - 2026-11-18
 
 - **Double or nothing is really double or nothing.** It used to just double the last stake, so after losing 3g a double or nothing was played for 6g, and winning it left you 3g up instead of even. Now it's played for what the run of back-to-back games stands at: lose 3g, and double or nothing is for 3g, so you end up owing 6g or nothing. Lose that too and the next one is for 6g. Once someone wins it back to nothing, only Rematch is offered. Debts from other games aren't part of it. The button shows the stake. Rematch still uses the same stake and starts a new run. Group deathroll no longer offers double or nothing, since every player's total is different.

@@ -412,11 +412,36 @@ function LUI.Build(p)
     return view
 end
 
+--- Redraws the open page when the next time-based change is due (the Draw button turning on,
+--- ticket sales closing), so a page left open doesn't wait for something else to refresh it.
+--- Only one wake is pending at a time; a long wait is broken into hour-long steps.
+local wakeAt
+local function WakeFor(L, officer)
+    local Lot = ns.Lottery
+    if not L or L.state ~= "open" then return end
+    local now = Lot.Now()
+    local due
+    for _, t in ipairs({ Lot.SalesClose(L), L.drawAt,
+        (officer and not ns.IsMe(L.by)) and (L.drawAt + Lot.TAKEOVER) or nil }) do
+        if t > now and (not due or t < due) then due = t end
+    end
+    if not due then return end
+    local at = math.min(due, now + 3600)
+    if wakeAt and wakeAt > now and wakeAt <= at then return end -- an earlier one is already set
+    wakeAt = at
+    C_Timer.After(at - now + 0.5, function()
+        if wakeAt ~= at then return end -- replaced by a newer one
+        wakeAt = nil
+        LUI.Refresh()
+    end)
+end
+
 function LUI.Refresh()
     if not view or not view:IsShown() then return end
     local Lot = ns.Lottery
     local L = Lot.Current()
     local officer = Lot.IsOfficer()
+    WakeFor(L, officer)
     local prev = Lot.Previous()
     view.prev:SetText(prev and ("|cffbbbbbbLast lottery:|r %s (%s)"):format(WonText(prev.winner, prev.pot, prev.stake),
         date("!%d %b", (prev.at or 0) + Lot.BRISBANE)) or "|cff888888No lottery has been drawn yet.|r")

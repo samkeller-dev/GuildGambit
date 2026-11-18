@@ -1,4 +1,8 @@
--- Games/Kodo.lua: Kodo Crossing duels (replaced Slots in 1.7.0).
+-- Games/Kodo.lua: Kodo Crossing duels (replaced Slots in 1.7.0, retired in 2.4.0).
+--
+-- RETIRED: Kodo Crossing is no longer a gambling game - it's played solo in the Arcade tab.
+-- No duel can be started, and invites from older addons are turned down. The rest stays so a
+-- duel between two older addons can still be watched on the Live tab.
 --
 -- The challenger picks a wager and a random seed. Once accepted, each player gets ONE run of
 -- Kodo Crossing (UI/Arcade.lua) on exactly the same lanes, generated from that seed. Each
@@ -48,6 +52,12 @@ end
 --- Challenge target (or "practice" for a solo run).
 function KD.Challenge(target, wager)
     if not target or target == "" or target:lower() == "practice" or ns.IsMe(target) then
+        ns.UI.SetShown(true)
+        ns.UI.SelectTab("arcade")
+        return nil
+    end
+    do
+        ns.Print("Kodo Crossing duels have been retired - play it in the Arcade instead.")
         ns.UI.SetShown(true)
         ns.UI.SelectTab("arcade")
         return nil
@@ -185,6 +195,7 @@ Comm.On("KD_INV", function(f, sender)
     local bet, seed = tonumber(f.s), tonumber(f.z)
     if not f.id or not bet or bet < 0 or not seed then return end
     local function no(reason) Comm.Send("KD_NO", { id = f.id, r = reason }, sender) end
+    do return no("Kodo Crossing duels were retired in GuildGambit 2.4.0 - it's played in the Arcade now") end
     if Games.Busy() then return no("busy") end
     if ns.db.dnd then return no("do not disturb") end
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end

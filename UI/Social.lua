@@ -43,7 +43,6 @@ function Social.Entries(name)
         { ("Deathroll (%s, 1-%s)"):format(stake, start), go(function() ns.Deathroll.Challenge(name, bet, start) end) },
         { ("Coinflip (%s)"):format(stake), go(function() ns.Coinflip.Challenge(name, bet) end) },
         { ("Blackjack (%s)"):format(stake), go(function() ns.Blackjack.Deal(name, bet) end) },
-        { ("Kodo Crossing (%s)"):format(stake), go(function() ns.Kodo.Challenge(name, bet) end) },
     }
 end
 

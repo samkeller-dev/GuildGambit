@@ -141,7 +141,7 @@ function ns.RematchText(tag)
     return ""
 end
 
-local REMATCH = { deathroll = true, coinflip = true, kodo = true, blackjack = true, groupdr = true }
+local REMATCH = { deathroll = true, coinflip = true, blackjack = true, groupdr = true } -- (Kodo duels: retired)
 
 --- The finished game a rematch would repeat, or nil.
 function Games.RematchOf()

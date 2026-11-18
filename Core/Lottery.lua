@@ -79,12 +79,35 @@ local function GuildKey()
     return name or "_noguild"
 end
 
---- This guild's lottery record: { cur = lottery or nil, prev = { id, winner, pot, at } or nil }.
+--- True if lottery `id` is known to have been drawn (it's the previous one, or in `done`).
+local function KnownDrawn(data, id)
+    return id ~= nil and ((data.done and data.done[id]) or (data.prev and data.prev.id == id)) and true or false
+end
+
+--- This guild's lottery record: { cur = lottery or nil, prev = { id, winner, pot, at } or nil,
+--- done = { [id] = drawn at } (lotteries known to be drawn: never taken back as open) }.
 function Lottery.Data()
     ns.db.lottery = ns.db.lottery or {}
     local key = GuildKey()
     ns.db.lottery[key] = ns.db.lottery[key] or {}
-    return ns.db.lottery[key]
+    local data = ns.db.lottery[key]
+    -- (2.3.0 could take a drawn lottery back as open: drop such a copy)
+    if data.cur and data.cur.state == "open" and KnownDrawn(data, data.cur.id) then data.cur = nil end
+    return data
+end
+
+Lottery.DONE_KEEP = 20 -- drawn lottery ids remembered
+
+--- Notes that lottery `id` has been drawn.
+local function MarkDone(data, id, at)
+    if not id then return end
+    data.done = data.done or {}
+    data.done[id] = tonumber(at) or data.done[id] or 0
+    local ids = {}
+    for k in pairs(data.done) do ids[#ids + 1] = k end
+    if #ids <= Lottery.DONE_KEEP then return end
+    table.sort(ids, function(a, b) return data.done[a] > data.done[b] end)
+    for i = Lottery.DONE_KEEP + 1, #ids do data.done[ids[i]] = nil end
 end
 
 function Lottery.Current() return Lottery.Data().cur end
@@ -278,6 +301,7 @@ local function KeepPrevious(data, L)
     if L and L.state == "drawn" and L.winner and L.winner ~= "" then
         data.prev = { id = L.id, winner = L.winner, pot = L.potGold, at = L.drawnAt, stake = Lottery.WinnerStake(L) }
     end
+    if L and L.state == "drawn" then MarkDone(data, L.id, L.drawnAt) end
 end
 
 --- Adopts a lottery heard from someone else. One at a time: a running lottery is only ever
@@ -287,6 +311,7 @@ local function Adopt(f)
     local L = data.cur
     local created = tonumber(f.t) or 0
     if data.closed and data.closed[f.id] then return nil end -- closed by its creator: gone for good
+    if not (L and L.id == f.id) and KnownDrawn(data, f.id) then return nil end -- drawn already
     if L and L.id == f.id then
         if f.a == "1" then L.announced = true end
         TakeDate(L, f.d, f.dr) -- (passed on by someone who heard about a date change we missed)
@@ -313,10 +338,41 @@ local function Adopt(f)
 end
 
 -- (quietly: guildies are only told once the creator clicks Announce)
+Lottery.toldDone = {} -- sender -> GetTime() we last told them their lottery was drawn
+
 Comm.On("LOT_NEW", function(f, sender)
     if not f.id or not ns.Guild.Allowed(sender) then return end
+    local data = Lottery.Data()
+    if KnownDrawn(data, f.id) and not (data.cur and data.cur.id == f.id) and not ns.IsMe(sender) then
+        -- their copy is stuck on a lottery that's been drawn: tell them, and send what we know
+        local key = ns.Full(sender)
+        if GetTime() - (Lottery.toldDone[key] or -1e9) >= 60 then
+            Lottery.toldDone[key] = GetTime()
+            Comm.Send("LOT_DONE", { id = f.id }, sender)
+            Lottery.Share(sender)
+        end
+        return
+    end
     Adopt(f)
     Changed()
+end)
+
+--- Drops my copy of lottery `id` if it's still open past its draw time: it was drawn and the
+--- result never reached me. Returns true if it was dropped.
+local function DropStale(data, id, why)
+    local L = data.cur
+    if not L or L.id ~= id or L.state ~= "open" or Now() < (L.drawAt or 0) then return false end
+    data.cur = nil
+    MarkDone(data, id, Now())
+    ns.Log("Lottery: caught up - %s", why)
+    return true
+end
+
+-- someone has seen this lottery drawn (I still have it as open: the result never reached me)
+Comm.On("LOT_DONE", function(f, sender)
+    if not f.id or not ns.Guild.Allowed(sender) then return end
+    local data = Lottery.Data()
+    if DropStale(data, f.id, "that lottery was already drawn.") then Changed() end
 end)
 
 local function AnnounceText(L)
@@ -777,6 +833,7 @@ local function ApplyResult(L, f)
     L.state, L.winner, L.roll = "drawn", (f.w and f.w ~= "") and ns.Full(f.w) or "", tonumber(f.r)
     L.drawnTotal, L.potGold, L.drawnAt, L.drawnBy = tonumber(f.n), tonumber(f.g), tonumber(f.at), f.by
     L.drawn, L.drawnParts = nil, nil
+    MarkDone(Lottery.Data(), L.id, L.drawnAt)
     EndCountdown(L)
 end
 
@@ -860,8 +917,14 @@ Comm.On("LOT_PREV", function(f, sender)
         data.prev.stake = stake
         return Changed()
     end
-    if data.prev and (data.prev.at or 0) >= at then return end
-    if data.cur and data.cur.id == f.id then return end -- that's the current one, drawn
+    MarkDone(data, f.id, at)
+    if data.cur and data.cur.id == f.id then
+        -- that's my current one: drawn (fine), or still open here because I missed the result
+        if not DropStale(data, f.id, ("%s won the %s pot."):format(ns.Short(f.w), ns.Money(tonumber(f.g) or 0))) then
+            return
+        end
+    end
+    if data.prev and (data.prev.at or 0) >= at then return Changed() end
     data.prev = { id = f.id, winner = ns.Full(f.w), pot = tonumber(f.g) or 0, at = at, stake = stake }
     Changed()
 end)

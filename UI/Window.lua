@@ -528,10 +528,8 @@ local function BuildPlay(p)
         ns.Deathroll.Challenge(t, bet(), p.start:GetText())
     end)
     p.dr:SetPoint("TOPLEFT", betLabel, "BOTTOMLEFT", 0, -12)
-    p.kodo = Button(p, "Kodo", 82, function() ns.Kodo.Challenge(target(), bet()) end)
-    p.kodo:SetPoint("LEFT", p.dr, "RIGHT", 6, 0)
     p.bj = Button(p, "Blackjack", 82, function() ns.Blackjack.Deal(target(), bet()) end)
-    p.bj:SetPoint("LEFT", p.kodo, "RIGHT", 6, 0)
+    p.bj:SetPoint("LEFT", p.dr, "RIGHT", 6, 0)
     p.cf = Button(p, "Coinflip", 82, function() ns.Coinflip.Challenge(target(), bet()) end)
     p.cf:SetPoint("LEFT", p.bj, "RIGHT", 6, 0)
     p.gdr = Button(p, "Group DR", 82, function() ns.GroupDeathroll.Open(bet(), p.start:GetText()) end)
@@ -966,44 +964,6 @@ local function BuildLive(p)
     p.stop = Button(p, "Stop watching", 120, function() ns.Live.Unwatch() end)
     p.stop:SetPoint("TOPRIGHT", p.table, "BOTTOMRIGHT", 0, -4)
 
-    -- side bets: back a player with some gold, against the other spectators
-    local sb = CreateFrame("Frame", nil, p)
-    p.sb = sb
-    sb:SetPoint("TOPLEFT", p.table, "BOTTOMLEFT", 0, -28)
-    sb:SetPoint("TOPRIGHT", p.table, "BOTTOMRIGHT", 0, -28)
-    sb:SetHeight(48)
-    sb.label = Label(sb, "Side bet:", "GameFontNormal")
-    sb.label:SetPoint("TOPLEFT", 2, -4)
-    sb.amount = Input(sb, 50, "1", true, 6)
-    sb.amount:SetPoint("LEFT", sb.label, "RIGHT", 8, 0)
-    local coin = Label(sb, "|TInterface\\MoneyFrame\\UI-GoldIcon:12:12|t")
-    coin:SetPoint("LEFT", sb.amount, "RIGHT", 2, 0)
-    sb.pick = 1
-    local function Move(by)
-        sb.pick = sb.pick + by
-        UI.Refresh()
-    end
-    sb.prev = Button(sb, "<", 24, function() Move(-1) end)
-    sb.prev:SetPoint("LEFT", coin, "RIGHT", 10, 0)
-    sb.who = Label(sb, "", "GameFontHighlight")
-    sb.who:SetPoint("LEFT", sb.prev, "RIGHT", 4, 0)
-    sb.who:SetWidth(110)
-    sb.who:SetJustifyH("CENTER")
-    sb.who:SetWordWrap(false)
-    sb.next = Button(sb, ">", 24, function() Move(1) end)
-    sb.next:SetPoint("LEFT", sb.who, "RIGHT", 4, 0)
-    sb.place = Button(sb, "Bet", 70, function()
-        local g = ns.Live.watching
-        local gold = tonumber(sb.amount:GetText())
-        if g and sb.target and gold then ns.SideBets.Place(g, sb.target, math.floor(gold) * ns.COPPER_PER_GOLD) end
-    end)
-    sb.place:SetPoint("TOPRIGHT", 0, 0)
-    sb.pools = Label(sb, "", "GameFontHighlightSmall")
-    sb.pools:SetPoint("TOPLEFT", 2, -28)
-    sb.pools:SetWidth(W - 40)
-    sb.pools:SetWordWrap(false)
-    sb:Hide()
-
     p.showLottery = false
     if ns.LotteryUI then ns.LotteryUI.Build(p) end
 end
@@ -1018,36 +978,6 @@ function UI.ShowLottery()
         ns.Live.Unwatch()
         UI.Refresh()
     end
-end
-
---- The side-bet row for the game being watched (g: Live entry, m: its mirror).
-local function RefreshSideBets(p, g)
-    local sb, m = p.sb, g and g.mirror
-    if not m or g.ended and not (ns.SideBets.mine[g.id]) then sb:Hide() return end
-    sb:Show()
-    local players = m.kind == "groupdr" and (m.players or {}) or { m.a, m.b }
-    local n = #players
-    if n == 0 then sb:Hide() return end
-    sb.pick = ((sb.pick - 1) % n) + 1
-    sb.target = players[sb.pick]
-    sb.who:SetText(ns.Short(sb.target))
-    local mine = ns.SideBets.mine[g.id]
-    local open = m.betsLeft ~= nil and not g.ended
-    for _, b in ipairs({ sb.prev, sb.next, sb.place }) do
-        if open then b:Enable() else b:Disable() end
-    end
-    sb.place:SetText(mine and "Change" or "Bet")
-    -- the pools, and what I've put on
-    local parts = {}
-    for _, name in ipairs(players) do
-        local pool = m.pools and m.pools[name]
-        if pool then parts[#parts + 1] = ("%s |cffffd100%s|r (%d)"):format(ns.Short(name), ns.Money(pool.s), pool.n) end
-    end
-    local closes = not open and "|cff888888closed|r"
-        or (m.betsLeft == "u" and "|cff20ff20open until it starts|r" or ("|cff20ff20closes in %ss|r"):format(m.betsLeft))
-    local you = mine and ("  |  you: %s on %s%s"):format(ns.Money(mine.s), ns.Short(mine.on),
-        mine.state == "pending" and " (sending...)" or (mine.state == "settled" and " (settled)" or "")) or ""
-    sb.pools:SetText(("Bets %s  |  %s%s"):format(closes, #parts > 0 and table.concat(parts, ", ") or "no bets yet", you))
 end
 
 ---------------------------------------------------------------------------
@@ -1311,11 +1241,8 @@ local function RefreshPlay(p)
         p.status:SetText("")
     end
     local watchers = game and ns.Live and ns.Live.WatcherCount(game) or 0
-    local sideBets, bettors = 0, 0
-    if game and ns.SideBets then sideBets, bettors = ns.SideBets.Total(game) end
-    if watchers > 0 or bettors > 0 then
-        p.status:SetText(p.status:GetText() .. ("  |cffbbbbbb(%d watching%s)|r"):format(watchers,
-            bettors > 0 and (", " .. ns.Money(sideBets) .. " in side bets") or ""))
+    if watchers > 0 then
+        p.status:SetText(p.status:GetText() .. ("  |cffbbbbbb(%d watching)|r"):format(watchers))
     end
     if prompt then
         p.roll:SetText(prompt.label or ("Roll " .. prompt.lo .. "-" .. prompt.hi))
@@ -1344,7 +1271,7 @@ local function RefreshPlay(p)
         p.rematchDouble:SetText(dbl and ("Double or nothing: " .. ns.Money(dbl)) or "Double or nothing")
         if dbl then p.rematchDouble:Enable() else p.rematchDouble:Disable() end
     end
-    for _, b in ipairs({ p.dr, p.kodo, p.bj, p.cf, p.gdr }) do
+    for _, b in ipairs({ p.dr, p.bj, p.cf, p.gdr }) do
         if game then b:Disable() else b:Enable() end
     end
 end
@@ -1556,12 +1483,11 @@ local function RefreshLive(p)
     if lot then lot:SetShown(p.showLottery and not g) end
     if p.showLottery and not g and lot then
         if rawget(p, "kodoView") then p.kodoView:Hide() end
-        p.table:Hide() p.hint:Hide() p.sb:Hide() p.stop:Hide()
+        p.table:Hide() p.hint:Hide() p.stop:Hide()
         p.info:SetText("")
         ns.LotteryUI.Refresh()
         return
     end
-    RefreshSideBets(p, g)
     if not g then
         if rawget(p, "kodoView") then p.kodoView:Hide() end
         p.table:Hide()

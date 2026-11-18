@@ -12,7 +12,7 @@ local HELP = {
     "Wagers: 10 (gold), 1.5, or gold/silver/copper like 1g 50s 25c. 0 = just for fun.",
     "/gg dr <player|practice> <wager> [start] - deathroll (default start 1000)",
     "/gg group <wager> [start] - open a group deathroll for the guild | /gg start - start it",
-    "/gg kodo <wager> <player|practice> - Kodo Crossing: one run each on the same lanes, higher score wins",
+    "/gg arcade - Kodo Crossing, the arcade game (just for fun - no gold)",
     "/gg bj <wager> <player|practice> - blackjack",
     "/gg flip <wager> <player|practice> [alliance|horde] - coinflip: heads Alliance, tails Horde",
     "/gg roll | hit | stand | double | cancel - act in your game",
@@ -28,7 +28,7 @@ local HELP = {
     "/gg remind - who owes whom, now | /gg remind on|off - the reminder at login",
     "/gg lottery - the guild lottery (Live tab) | /gg lottery buy <n> at a mailbox | the creator: /gg lottery announce|date|draw|close | the pot: /gg lottery confirm|unconfirm <name>",
     "Right-click a guildie (chat name, portrait, guild list) > Challenge - uses the wager on the Play tab",
-    "After a game: Rematch or Double or nothing | Live tab: back a player with a side bet",
+    "After a game: Rematch or Double or nothing",
     "/gg sound on|off - sound effects | /gg options - the settings page (Options > AddOns)",
     "/gg reset <password> - new leaderboard season, clears all debts",
     "/gg minimap - show/hide the minimap button",
@@ -70,14 +70,15 @@ commands.deathroll = commands.dr
 
 -- Slots was retired in 1.7.0, replaced by Kodo Crossing
 commands.slots = function()
-    ns.Print("Slots has been retired - challenge someone to Kodo Crossing instead: |cffffff00/gg kodo <wager> <player>|r")
+    ns.Print("Slots has been retired - try a deathroll, blackjack or coinflip instead.")
 end
 commands.spin = commands.slots
 
--- "/gg kodo <wager> <player words...>"
-commands.kodo = function(gold, ...)
-    local words = { ... }
-    ns.Kodo.Challenge(#words > 0 and table.concat(words, " ") or nil, gold)
+-- Kodo Crossing duels were retired in 2.4.0: the game is in the Arcade, just for fun
+commands.kodo = function()
+    ns.Print("Kodo Crossing duels have been retired - play it in the Arcade instead.")
+    ns.UI.SetShown(true)
+    ns.UI.SelectTab("arcade")
 end
 commands.arcade = function() ns.UI.SetShown(true) ns.UI.SelectTab("arcade") end
 commands.wealth = function(...)

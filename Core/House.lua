@@ -339,7 +339,6 @@ function Live.End(game)
     local result = Cut(Live.ResultText(game))
     local function send()
         Comm.Send("LIVE_END", { id = game.id, r = result }, nil)
-        if ns.SideBets then ns.SideBets.Close(game) end
     end
     if game.revealDelay then C_Timer.After(game.revealDelay, send) else send() end
 end
@@ -360,7 +359,6 @@ local function Tick()
             live = { sent = 0, watchers = {}, last = nil }
             game.live = live
         end
-        if ns.SideBets then ns.SideBets.Touch(game) end
         local h = Live.Describe(game)
         if now - live.sent >= Live.HEARTBEAT or live.header ~= h then
             live.sent, live.header = now, h
@@ -484,7 +482,6 @@ end)
 Comm.On("LIVE_END", function(f, sender)
     local g = Live.games[f.id or ""]
     if not g or not ns.SameName(g.host, sender) then return end
-    if ns.SideBets then ns.SideBets.GameEnded(f.id) end
     if Live.watching == f.id then
         -- the game we're watching: keep its final table up for a moment, with the result
         g.ended, g.endedAt = f.r or "Finished", GetTime()
@@ -579,11 +576,9 @@ function Live.State(game)
         f.t, f.w, f.mx, f.st, f.ga = num(game.turn), num(game.winner), game.max or game.start, game.start, game.state
         local lr = game.lastRoll
         if lr then f.lw, f.lv, f.lm, f.ls = num(lr.who), lr.value, lr.max, lr.seq end
-        if ns.SideBets then ns.SideBets.AddToState(game, f) end
         return f
     end
     f.a, f.b, f.s = game.a, game.b, game.bet or game.stake or 0
-    if ns.SideBets then ns.SideBets.AddToState(game, f) end
     if game.finished then
         local o = game.outcome or 0
         f.o = o == 0 and "" or side(o > 0 and ns.Me() or game.opponent)
@@ -696,7 +691,6 @@ Comm.On("STATE", function(f, sender)
     local ok, m = pcall(Live.Mirror, g, f)
     if ok and m then
         g.mirror = m
-        if ns.SideBets then ns.SideBets.FromState(m, f) end
         if m.kind == "kodo" and Live.watching == g.id and not g.askedB and m.b then
             g.askedB = m.b
             Comm.Send("WATCH", { id = g.id, v = 2 }, m.b)

@@ -13,7 +13,7 @@ Options.settings = {} -- key -> the game's setting object (to update the page af
 local DEFS = {
     { section = "Challenges" },
     { key = "dnd", name = "Do not disturb", slash = "/gg dnd",
-        tip = "Turn down every incoming challenge automatically - deathroll, blackjack, coinflip, Kodo Crossing and group deathroll invites. The challenger is told you're not taking games." },
+        tip = "Turn down every incoming challenge automatically - deathroll, blackjack, coinflip and group deathroll invites. The challenger is told you're not taking games." },
     { key = "guildOnly", name = "Guild members only", slash = "/gg guildonly",
         tip = "Only accept games from members of your guild." },
     { section = "Chat" },
