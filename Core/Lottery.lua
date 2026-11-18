@@ -29,7 +29,8 @@ Lottery.SUBJECT = "GuildGambit lottery "  -- .. lottery id
 Lottery.MAX_TICKETS = 100        -- the most "tickets per player" an officer can allow
 Lottery.SALES_CLOSE = 75 * 60    -- ticket sales close this long before the draw
 Lottery.TAKEOVER = 3 * 86400     -- after the draw time + this, any officer may draw
-Lottery.SYNC_WAIT = 5            -- seconds the drawer waits for everyone's tickets
+Lottery.SYNC_WAIT = 15           -- the countdown after Draw is clicked (it also collects everyone's tickets)
+Lottery.REVEAL = 5               -- seconds the draw's number spins; nobody is told the winner before it lands
 Lottery.ROLL_TIMEOUT = 30        -- seconds to see the draw's roll before giving up
 Lottery.MAIL_WAIT = 8            -- seconds before saying the mail is taking a while
 Lottery.MONEY_WAIT = 5           -- seconds after "mail sent" for the gold to leave our bags
@@ -241,7 +242,7 @@ function Lottery.Share(target)
     local data = Lottery.Data()
     for id, by in pairs(data.closed or {}) do Comm.Send("LOT_CLOSE", { id = id, by = by }, target) end
     local prev = data.prev
-    if prev then Comm.Send("LOT_PREV", { id = prev.id, w = prev.winner, g = prev.pot, at = prev.at }, target) end
+    if prev then Comm.Send("LOT_PREV", { id = prev.id, w = prev.winner, g = prev.pot, at = prev.at, s = prev.stake }, target) end
     local L = data.cur
     if not L then return end
     Fresh(L)
@@ -257,9 +258,22 @@ function Lottery.OnHello(sender)
     if data.cur or data.prev or next(data.closed or {}) then Lottery.Share(sender) end
 end
 
+--- What the winner of a drawn lottery had in the pot: their tickets in the draw x the price
+--- (from the ticket list the draw used, or our own count of their tickets until it arrives).
+function Lottery.WinnerStake(L)
+    if not L or L.state ~= "drawn" or not L.winner or L.winner == "" then return nil end
+    local n = L.drawn and L.drawn[L.winner]
+    if not n then
+        for _, e in ipairs(Lottery.Players(L)) do
+            if ns.SameName(e.name, L.winner) then n = e.n break end
+        end
+    end
+    return n and n * (L.price or 0) or nil
+end
+
 local function KeepPrevious(data, L)
     if L and L.state == "drawn" and L.winner and L.winner ~= "" then
-        data.prev = { id = L.id, winner = L.winner, pot = L.potGold, at = L.drawnAt }
+        data.prev = { id = L.id, winner = L.winner, pot = L.potGold, at = L.drawnAt, stake = Lottery.WinnerStake(L) }
     end
 end
 
@@ -568,27 +582,97 @@ local function Applies(L, f)
     return (f.by or "") < (L.drawnBy or "")
 end
 
+---------------------------------------------------------------------------
+-- The show around the draw (display only: the roll and the result don't depend on it).
+-- Clicking Draw starts a countdown on every addon online; when the result comes in, the
+-- number spins for REVEAL seconds, and only then is the winner told in chat and guild chat.
+---------------------------------------------------------------------------
+Lottery.countdown = nil -- { id, ends (GetTime), by } while a draw is counting down here
+Lottery.revealing = nil -- { id, ends (GetTime) } while the draw's number is spinning
+
+local function EndCountdown(L)
+    if Lottery.countdown and L and Lottery.countdown.id == L.id then Lottery.countdown = nil end
+end
+
+--- Seconds until the draw's roll (0 or less: rolling now), or nil if no draw is counting down.
+function Lottery.Countdown(L)
+    local c = Lottery.countdown
+    if not c or not L or c.id ~= L.id or L.state ~= "open" then return nil end
+    return c.ends - GetTime()
+end
+
+--- True while the draw's number is still spinning (the winner isn't shown yet).
+function Lottery.Revealing(L)
+    local r = Lottery.revealing
+    return r ~= nil and L ~= nil and r.id == L.id and GetTime() < r.ends
+end
+
+--- Seconds of the spin left, or nil.
+function Lottery.RevealLeft(L)
+    if not Lottery.Revealing(L) then return nil end
+    return Lottery.revealing.ends - GetTime()
+end
+
+local function StartCountdown(L, secs, by)
+    local c = { id = L.id, ends = GetTime() + secs, by = by }
+    Lottery.countdown = c
+    ns.Log("|cffffd100The guild lottery is being drawn in %d seconds|r - open the lottery on the Live tab to watch!", secs)
+    if not ns.IsMe(by) then ns.Sound("invite") end
+    if ns.LotteryUI and ns.LotteryUI.ShowCountdown then ns.LotteryUI.ShowCountdown(L) end
+    -- the drawer's addon says so itself if the roll never comes; everyone else hears it here
+    C_Timer.After(secs + Lottery.ROLL_TIMEOUT + 2, function()
+        if Lottery.countdown ~= c then return end
+        Lottery.countdown = nil
+        if not ns.IsMe(by) and L == Lottery.Current() and L.state == "open" then
+            ns.Log("|cffff8040The lottery draw didn't happen|r - %s can click Draw again.", ns.Short(by))
+        end
+        Changed()
+    end)
+end
+
+--- Runs tell() once the draw's number has landed (straight away if there's nothing to spin).
+local function Reveal(L, tell)
+    if not L.roll or L.roll < 1 then return tell() end
+    local r = { id = L.id, ends = GetTime() + Lottery.REVEAL }
+    Lottery.revealing = r
+    C_Timer.After(Lottery.REVEAL, function()
+        if Lottery.revealing == r then Lottery.revealing = nil end
+        tell()
+        Changed()
+    end)
+end
+
 local function ApplyResult(L, f)
     L.state, L.winner, L.roll = "drawn", (f.w and f.w ~= "") and ns.Full(f.w) or "", tonumber(f.r)
     L.drawnTotal, L.potGold, L.drawnAt, L.drawnBy = tonumber(f.n), tonumber(f.g), tonumber(f.at), f.by
     L.drawn, L.drawnParts = nil, nil
+    EndCountdown(L)
 end
 
 Comm.On("LOT_WIN", function(f, sender)
     local L = Lottery.Current()
     if not L or L.id ~= f.id then return end
+    local fresh = false
     if Applies(L, f) then
         local replaced = L.state == "drawn"
         ApplyResult(L, f)
+        fresh = true
         if replaced then ns.Log("|cffff8040Lottery: two draws happened - keeping %s's.|r", ns.Short(f.by)) end
-        if L.winner ~= "" and not ns.IsMe(L.winner) then
-            ns.Log("Guild lottery drawn: |cffffd100%s|r won the %s pot!", ns.Short(L.winner), ns.Money(L.potGold or 0))
-        end
         if ns.LotteryUI then ns.LotteryUI.PlayDraw(L) end
     end
     if f.pd == "1" then L.paid = true end
     if f.rf == "1" then L.refundsDone = true end
-    TellWinner(L)
+    if fresh then
+        -- the winner is told once the number has landed, not while it's still spinning
+        Reveal(L, function()
+            if L.winner ~= "" and not ns.IsMe(L.winner) then
+                ns.Log("Guild lottery drawn: |cffffd100%s|r won the %s pot!", ns.Short(L.winner), ns.Money(L.potGold or 0))
+            end
+            TellWinner(L)
+        end)
+    else
+        TellWinner(L)
+    end
     Changed()
 end)
 
@@ -614,6 +698,12 @@ Comm.On("LOT_SYNC", function(f, sender)
     local L = Lottery.Current()
     if not L or L.id ~= f.id then return end
     Fresh(L)
+    -- the draw's countdown (older versions don't send w, and just roll after their wait)
+    local w = tonumber(f.w)
+    if w and w > 0 and w <= 60 and L.state == "open" and L.announced and not ns.IsMe(sender)
+        and Now() >= L.drawAt - 300 and not Lottery.Countdown(L) then
+        StartCountdown(L, w, sender)
+    end
     C_Timer.After(math.random() * 2, function()
         SendClaims(L, sender)
         if ns.IsMe(L.pot) then SendReceipts(L, sender) end
@@ -632,9 +722,15 @@ Comm.On("LOT_PREV", function(f, sender)
     local data = Lottery.Data()
     local at = tonumber(f.at) or 0
     if not f.w or f.w == "" then return end
+    local stake = tonumber(f.s)
+    -- the same one, but we didn't know the winner's stake (older versions don't send it)
+    if data.prev and data.prev.id == f.id and not data.prev.stake and stake then
+        data.prev.stake = stake
+        return Changed()
+    end
     if data.prev and (data.prev.at or 0) >= at then return end
     if data.cur and data.cur.id == f.id then return end -- that's the current one, drawn
-    data.prev = { id = f.id, winner = ns.Full(f.w), pot = tonumber(f.g) or 0, at = at }
+    data.prev = { id = f.id, winner = ns.Full(f.w), pot = tonumber(f.g) or 0, at = at, stake = stake }
     Changed()
 end)
 
@@ -656,8 +752,8 @@ function Lottery.Draw(force)
         return false
     end
     Lottery.drawing = true
-    Comm.Send("LOT_SYNC", { id = L.id }, nil)
-    ns.Log("Drawing the lottery: collecting everyone's tickets...")
+    Comm.Send("LOT_SYNC", { id = L.id, w = Lottery.SYNC_WAIT }, nil)
+    StartCountdown(L, Lottery.SYNC_WAIT, ns.Me())
     Changed()
     C_Timer.After(Lottery.SYNC_WAIT, function() Lottery.Roll(L) end)
     return true
@@ -665,7 +761,7 @@ end
 
 --- Step 2 of the draw: the roll itself, over the tickets as they are now.
 function Lottery.Roll(L)
-    if L ~= Lottery.Current() or L.state ~= "open" then Lottery.drawing = false Changed() return end
+    if L ~= Lottery.Current() or L.state ~= "open" then Lottery.drawing = false EndCountdown(L) Changed() return end
     local snapshot = {}
     local total = 0
     for _, e in ipairs(Lottery.Players(L)) do snapshot[e.name] = e.n total = total + e.n end
@@ -692,19 +788,22 @@ function Lottery.Roll(L)
             ApplyResult(L, { w = winner, r = v, n = total, g = total * L.price, at = Now(), by = ns.Me() })
             L.drawn = snapshot
             CheckMissed(L)
-            SendResult(L, nil)
-            ns.Log("|cffffd100Lottery drawn:|r ticket %d of %d - %s wins %s! %s holds the pot.", v, total,
-                ns.Short(winner), ns.Money(L.potGold), ns.Short(L.pot))
-            ns.GuildAnnounce(("[GuildGambit] Lottery drawn! %s wins the %s pot (ticket %d of %d)!"):format(
-                ns.Short(winner), ns.Money(L.potGold), v, total))
+            SendResult(L, nil) -- the result is final and shared now; only the telling waits for the spin
             if ns.LotteryUI then ns.LotteryUI.PlayDraw(L) end
-            TellWinner(L)
+            Reveal(L, function()
+                ns.Log("|cffffd100Lottery drawn:|r ticket %d of %d - %s wins %s! %s holds the pot.", v, total,
+                    ns.Short(winner), ns.Money(L.potGold), ns.Short(L.pot))
+                ns.GuildAnnounce(("[GuildGambit] Lottery drawn! %s wins the %s pot (ticket %d of %d)!"):format(
+                    ns.Short(winner), ns.Money(L.potGold), v, total))
+                TellWinner(L)
+            end)
             Changed()
         end,
     })
     if not ns.Rolls.Roll(1, total) then
         done = true
         Lottery.drawing = false
+        EndCountdown(L)
         ns.Rolls.UnwatchPrefix(key)
         ns.Print("Couldn't roll 1-%d for the draw - try again.", total)
         Changed()
@@ -714,6 +813,7 @@ function Lottery.Roll(L)
         if done then return end
         done = true
         Lottery.drawing = false
+        EndCountdown(L)
         ns.Rolls.UnwatchPrefix(key)
         ns.Log("|cffff4040The draw's roll was never seen - nothing was recorded. Click Draw again.|r")
         Changed()

@@ -10,7 +10,7 @@ local ROWS, ROW_H = 12, 18
 local PICK_ROWS, PICK_ROW_H = 10, 18
 local ARROW = " |TInterface\\Buttons\\Arrow-Down-Up:14:14|t"
 local RIGHT = 272 -- x of the right-hand column
-LUI.SPIN = 5      -- seconds the draw's number spins before it stops on the winning ticket
+LUI.SPIN = ns.Lottery and ns.Lottery.REVEAL or 5 -- seconds the draw's number spins before it stops on the winning ticket
 LUI.HOLD = 8      -- seconds the result stays up afterwards
 
 local view, form
@@ -67,13 +67,19 @@ function LUI.HasLottery()
     return IsInGuild == nil or IsInGuild() == true
 end
 
+--- "Bob won 30g with 10g in" (the stake is left out if it isn't known).
+local function WonText(winner, pot, stake)
+    return ("%s won %s"):format(ns.Short(winner), ns.Money(pot or 0))
+        .. (stake and stake > 0 and (" with " .. ns.Money(stake) .. " in") or "")
+end
+
 function LUI.RowText()
     local Lot = ns.Lottery
     local L = Lot.Current()
     if not L then
         local prev = Lot.Previous()
         if prev then
-            return ("|cffffd100Guild Lottery|r - last won by %s (%s)"):format(ns.Short(prev.winner), ns.Money(prev.pot or 0))
+            return "|cffffd100Guild Lottery|r - last lottery: " .. WonText(prev.winner, prev.pot, prev.stake)
         end
         return "|cffffd100Guild Lottery|r - " .. (Lot.IsOfficer() and "none running - open one here" or "none running right now")
     end
@@ -81,13 +87,16 @@ function LUI.RowText()
     if L.state == "open" and not L.announced then
         return "|cffffd100Guild Lottery|r - " .. (ns.IsMe(L.by) and "created - |cffff8040not announced yet|r" or "coming soon")
     end
+    if Lot.Countdown(L) or Lot.Revealing(L) then
+        return "|cffffd100Guild Lottery|r - |cffff8040drawing now - click to watch!|r"
+    end
     if L.state == "open" then
         local when = Lot.Now() >= L.drawAt and "|cffff8040draw due|r"
             or (Lot.SalesOpen(L) and ("draw " .. Until(L.drawAt)) or ("sales closed, draw " .. Until(L.drawAt)))
         return ("|cffffd100Guild Lottery|r - %s pot, %d ticket%s - %s"):format(ns.Money(pot), n, n == 1 and "" or "s", when)
     end
     if L.winner == "" then return "|cffffd100Guild Lottery|r - drawn, no tickets sold" end
-    return ("|cffffd100Guild Lottery|r - drawn: %s won %s"):format(ns.Short(L.winner), ns.Money(L.potGold or 0))
+    return "|cffffd100Guild Lottery|r - drawn: " .. WonText(L.winner, L.potGold, Lot.WinnerStake(L))
 end
 
 ---------------------------------------------------------------------------
@@ -118,7 +127,12 @@ local function BuildDraw(v)
     d.result = Label(d, "", "GameFontNormalLarge")
     d.result:SetPoint("TOP", d.outof, "BOTTOM", 0, -16)
     d.result:SetJustifyH("CENTER")
-    d.close = Button(d, "Close", 80, function() d:Hide() end)
+    d.close = Button(d, "Close", 80, function()
+        -- closed by hand: don't bring this countdown or spin back on the next refresh
+        d.closedFor = ns.Lottery.countdown or ns.Lottery.revealing
+        d.anim, d.count = nil, nil
+        d:Hide()
+    end)
     d.close:SetPoint("BOTTOM", 0, 14)
     -- the landing: a pop of the number, like a deathroll roll
     d.pop = d.holder:CreateAnimationGroup()
@@ -127,7 +141,29 @@ local function BuildDraw(v)
     local shrink = d.pop:CreateAnimation("Scale")
     shrink:SetScale(1 / 1.35, 1 / 1.35) shrink:SetDuration(0.2) shrink:SetOrder(2)
     d:SetScript("OnUpdate", function(self, elapsed)
-        local a = self.anim
+        local a = rawget(self, "anim")
+        local count = rawget(self, "count")
+        if not a and count then
+            -- the countdown before the roll
+            local left = ns.Lottery.Countdown(ns.Lottery.Current())
+            if not left then self.count = nil self:Hide() return end
+            if left > 0 then
+                local s = math.ceil(left)
+                if s ~= count.shown then
+                    count.shown = s
+                    self.cap:SetText("Drawing the lottery in")
+                    self.number:SetText(tostring(s))
+                    self.number:SetTextColor(1, 0.84, 0.25)
+                    self.pop:Stop() self.pop:Play()
+                    if s <= 5 and ns.Sound then ns.Sound("card") end
+                end
+            elseif count.shown ~= 0 then
+                count.shown = 0
+                self.cap:SetText("Rolling...")
+                self.number:SetText("?")
+            end
+            return
+        end
         if not a then return end
         a.t = a.t + elapsed
         if a.t < LUI.SPIN then
@@ -158,15 +194,44 @@ local function BuildDraw(v)
     end)
 end
 
---- Plays the draw for whoever has the lottery page open (from the drawer, or the result arriving).
-function LUI.PlayDraw(L)
+--- Plays the draw for whoever has the lottery page open (from the drawer, the result arriving,
+--- or the page being opened mid-spin). `from`: seconds already spun.
+function LUI.PlayDraw(L, from)
     if not view or not view:IsVisible() or not L or not L.roll or L.roll < 1 then return end
     local d = view.drawAnim
-    d.anim = { t = 0, next = 0, total = L.drawnTotal or 1, roll = L.roll, winner = L.winner, pot = L.potGold or 0 }
+    d.count = nil
+    d.anim = { t = math.max(0, from or 0), next = 0, total = L.drawnTotal or 1, roll = L.roll, winner = L.winner,
+        pot = L.potGold or 0 }
     d.cap:SetText("Drawing the lottery...")
     d.result:SetText("")
     d.outof:SetText(("out of %d ticket%s"):format(L.drawnTotal or 1, (L.drawnTotal or 1) == 1 and "" or "s"))
     d:Show()
+end
+
+--- The countdown before the roll, for whoever has the lottery page open.
+function LUI.ShowCountdown(L)
+    if not view or not view:IsVisible() or not ns.Lottery.Countdown(L) then return end
+    local d = view.drawAnim
+    if rawget(d, "anim") then return end -- a spin is already showing
+    d.count = { shown = nil }
+    local n = ns.Lottery.Totals(L)
+    d.cap:SetText("Drawing the lottery in")
+    d.number:SetText("")
+    d.outof:SetText(("%d ticket%s in the draw"):format(n, n == 1 and "" or "s"))
+    d.result:SetText("")
+    d:Show()
+end
+
+--- Opening the page during a draw joins it: the countdown, or the spin where it's up to.
+local function JoinDraw(L)
+    local d = view.drawAnim
+    if d:IsShown() then return end
+    local Lot = ns.Lottery
+    if Lot.Countdown(L) and rawget(d, "closedFor") ~= Lot.countdown then
+        LUI.ShowCountdown(L)
+    elseif Lot.Revealing(L) and rawget(d, "closedFor") ~= Lot.revealing then
+        LUI.PlayDraw(L, LUI.SPIN - Lot.RevealLeft(L))
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -304,8 +369,8 @@ function LUI.Refresh()
     local L = Lot.Current()
     local officer = Lot.IsOfficer()
     local prev = Lot.Previous()
-    view.prev:SetText(prev and ("|cffbbbbbbLast lottery:|r %s won %s (%s)"):format(ns.Short(prev.winner),
-        ns.Money(prev.pot or 0), date("!%d %b", (prev.at or 0) + Lot.BRISBANE)) or "|cff888888No lottery has been drawn yet.|r")
+    view.prev:SetText(prev and ("|cffbbbbbbLast lottery:|r %s (%s)"):format(WonText(prev.winner, prev.pot, prev.stake),
+        date("!%d %b", (prev.at or 0) + Lot.BRISBANE)) or "|cff888888No lottery has been drawn yet.|r")
     -- officers can open the next one once this one is drawn (one at a time, never cancelled)
     view.new:SetShown(officer)
     if not L or L.state ~= "open" then view.new:Enable() else view.new:Disable() end
@@ -316,6 +381,7 @@ function LUI.Refresh()
         view.drawBtn:SetText(Lot.drawing and "Drawing..." or "Draw")
     end
     view.markPaid:Hide() view.markRefunds:Hide()
+    if L then JoinDraw(L) end
     local creatorOpen = L and L.state == "open" and ns.IsMe(L.by)
     view.announce:SetShown(creatorOpen and true or false)
     view.close:SetShown(creatorOpen and true or false)
@@ -344,11 +410,14 @@ function LUI.Refresh()
         view.draw:SetText(("Draw: %s\n%s\nSales close: %s"):format(Lot.When(L.drawAt),
             due and "|cffff8040due - waiting for " .. ns.Short(L.by) .. "|r" or Until(L.drawAt),
             Lot.SalesOpen(L) and Until(Lot.SalesClose(L)) or "|cff888888closed|r"))
+    elseif Lot.Revealing(L) then
+        view.draw:SetText("|cffff8040Drawing...|r") -- no winner on the page before the number lands
     elseif L.winner == "" then
         view.draw:SetText("Drawn - nobody bought a ticket.")
     else
-        view.draw:SetText(("|cff20ff20%s won!|r\nticket %d of %d\n%s"):format(ns.Short(L.winner), L.roll or 0,
-            L.drawnTotal or n, Lot.When(L.drawnAt)))
+        local stake = Lot.WinnerStake(L)
+        view.draw:SetText(("|cff20ff20%s won!|r%s\nticket %d of %d\n%s"):format(ns.Short(L.winner),
+            stake and (" (" .. ns.Money(stake) .. " in)") or "", L.roll or 0, L.drawnTotal or n, Lot.When(L.drawnAt)))
     end
     local mine = Lot.Mine(L)
     view.mine:SetText(("Your tickets: %d%s"):format(mine, mine > 0 and (" (" .. ns.Money(mine * L.price) .. ")") or ""))
@@ -363,7 +432,7 @@ function LUI.Refresh()
         r:SetShown(e ~= nil)
         if e then
             local name = ns.IsMe(e.name) and ("|cffffd100" .. ns.Short(e.name) .. "|r") or ns.Short(e.name)
-            if L.state == "drawn" and ns.SameName(e.name, L.winner) then name = "|cff20ff20" .. ns.Short(e.name) .. " (won)|r" end
+            if L.state == "drawn" and not Lot.Revealing(L) and ns.SameName(e.name, L.winner) then name = "|cff20ff20" .. ns.Short(e.name) .. " (won)|r" end
             r.name:SetText(name)
             r.n:SetText(tostring(e.n))
             r.stake:SetText(ns.Money(e.stake))

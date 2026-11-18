@@ -5,6 +5,12 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.2.0 - 2026-11-18
+
+- **The lottery draw is now a show.** Clicking **Draw** starts a 15-second countdown on everyone's addon, with a chat line telling the guild to open the lottery on the Live tab to watch. The lottery page shows the countdown, then the spin, on everyone's screen at once. Open the page partway through and you join the countdown or the spin where it's up to. The draw itself hasn't changed: it's still started by hand, and ticket sales still close 1h15m before.
+- **No spoilers.** Nobody is told the winner until the spin has landed: not in guild chat, not in anyone's chat, not on the Live row or the lottery page.
+- **The last winner's stake.** The Live tab shows the last lottery's winner, the pot they won and how much they had in it (their tickets x the price). The lottery row shows it until the next lottery opens, and the lottery page always does. Players who log in later hear it too.
+
 ## 2.1.5 - 2026-11-18
 
 - **Clearing a debt can't be undone by an old mail any more.** If gold mailed with **Pay debts** was still waiting for the other player to confirm when you cleared everything with them, confirming it afterwards counted it as a new payment and opened the debt again the other way. Clearing now drops mailed gold that's still waiting, and a mail sent before the clear is refused if its popup is answered later. Gold mailed after a clear still counts. A leaderboard reset does the same.
