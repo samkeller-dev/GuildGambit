@@ -1,5 +1,6 @@
 -- Board.lua: guild leaderboard. Each client works out its own stats from its ledger (real
--- games only, no practice, no payments) and shares them on the guild addon channel.
+-- games, plus the guild lottery's net gold and wagered; no practice, no payments) and shares
+-- them on the guild addon channel.
 -- Stored per guild in account-wide saved variables, so it survives reloads and alts.
 local ADDON_NAME, ns = ...
 local Comm, Compat = ns.Comm, ns.Compat
@@ -86,6 +87,11 @@ function Board.MyStats()
     local season = Board.Season()
     local since = season and season.localStart or 0
     for _, e in ipairs(ns.charDB.ledger) do
+        -- the guild lottery: net gold and wagered only (not a game, win, loss or streak)
+        if e.kind == "lottery" and (e.time or 0) >= since then
+            s.net = s.net + (e.net or 0)
+            s.wagered = s.wagered + (e.wager or 0)
+        end
         if not e.practice and (e.kind or "game") == "game" and (e.time or 0) >= since then
             s.net = s.net + e.net
             if e.net > s.best then s.best = e.net end
@@ -165,7 +171,8 @@ function Board.Ranked()
     Board.CleanSelf()
     local list = {}
     for name, s in pairs(Board.Table()) do
-        if s.games and s.games > 0 then
+        -- anyone who has played a game, or put gold in the lottery
+        if (s.games and s.games > 0) or (tonumber(s.wagered) or 0) > 0 then
             list[#list + 1] = { name = name, net = s.net, games = s.games, wins = s.wins, losses = s.losses,
                 best = s.best, wagered = s.wagered or 0, streak = s.streak or 0, drop = s.drop or 0,
                 race = s.race, sex = s.sex }

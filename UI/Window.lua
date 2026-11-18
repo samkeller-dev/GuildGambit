@@ -557,7 +557,7 @@ local function BuildPlay(p)
     -- after a game: the same again, or double or nothing
     p.rematch = Button(p, "Rematch", 90, function() ns.Games.Rematch(false) end)
     p.rematch:SetPoint("LEFT", p.roll, "RIGHT", 8, 0)
-    p.rematchDouble = Button(p, "Double or nothing", 140, function() ns.Games.Rematch(true) end)
+    p.rematchDouble = Button(p, "Double or nothing", 180, function() ns.Games.Rematch(true) end)
     p.rematchDouble:SetPoint("LEFT", p.rematch, "RIGHT", 8, 0)
     p.CurrentBet, p.CurrentStart = bet, function() return p.start:GetText() end
 end
@@ -1339,7 +1339,10 @@ local function RefreshPlay(p)
     p.cancel:SetShown(not again)
     if again then
         p.rematch:SetText(again.kind == "groupdr" and "Reopen room" or "Rematch")
-        if ns.Games.CanDouble() then p.rematchDouble:Enable() else p.rematchDouble:Disable() end
+        local dbl = ns.Games.DoubleStake()
+        p.rematchDouble:SetShown(again.kind ~= "groupdr")
+        p.rematchDouble:SetText(dbl and ("Double or nothing: " .. ns.Money(dbl)) or "Double or nothing")
+        if dbl then p.rematchDouble:Enable() else p.rematchDouble:Disable() end
     end
     for _, b in ipairs({ p.dr, p.kodo, p.bj, p.cf, p.gdr }) do
         if game then b:Disable() else b:Enable() end
@@ -1377,7 +1380,8 @@ local function RefreshLedger(p)
     local lines = { "Recent:" }
     for _, e in ipairs(ns.Ledger.Recent(6)) do
         local what = e.kind == "payment" and ("payment (" .. (e.via or "manual") .. ")") or e.game
-        lines[#lines + 1] = ("  %s %s: %s%s%s"):format(what, ns.Short(e.opponent), ns.Money(e.net, true),
+        local who = e.kind == "lottery" and "(guild)" or ns.Short(e.opponent)
+        lines[#lines + 1] = ("  %s %s: %s%s%s"):format(what, who, ns.Money(e.net, true),
             e.practice and " (practice)" or "", (not e.verified and not e.practice) and " (unverified)" or "")
     end
     p.recent:SetText(table.concat(lines, "\n"))

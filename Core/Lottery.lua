@@ -15,7 +15,9 @@
 --     pays for (never more than the limit), so a paid ticket counts even if no addon ever
 --     passed the purchase on.
 -- The creator draws (any officer may once it's 3 days overdue): their addon asks everyone
--- online for the latest tickets, waits a moment, then does one server /roll 1-<tickets>.
+-- online for the latest tickets, waits a moment, freezes the list, shuffles the players and
+-- tells everyone which ticket numbers they hold; 15 seconds later it does one server
+-- /roll 1-<tickets>, and the winner is whoever holds that number in the shuffled list.
 -- The result goes out with the exact ticket list used, so every player can check theirs were
 -- in it; any that weren't are listed as owed back. Paying the winner (and any such refund) is
 -- done by hand by the pot character, who marks it done for everyone to see.
@@ -29,7 +31,8 @@ Lottery.SUBJECT = "GuildGambit lottery "  -- .. lottery id
 Lottery.MAX_TICKETS = 100        -- the most "tickets per player" an officer can allow
 Lottery.SALES_CLOSE = 75 * 60    -- ticket sales close this long before the draw
 Lottery.TAKEOVER = 3 * 86400     -- after the draw time + this, any officer may draw
-Lottery.SYNC_WAIT = 15           -- the countdown after Draw is clicked (it also collects everyone's tickets)
+Lottery.SYNC_WAIT = 5            -- seconds after Draw is clicked to collect everyone's tickets
+Lottery.COUNTDOWN = 15           -- then the list is frozen and shuffled: seconds everyone sees their numbers before the roll
 Lottery.REVEAL = 5               -- seconds the draw's number spins; nobody is told the winner before it lands
 Lottery.ROLL_TIMEOUT = 30        -- seconds to see the draw's roll before giving up
 Lottery.MAIL_WAIT = 8            -- seconds before saying the mail is taking a while
@@ -536,20 +539,72 @@ end
 ---------------------------------------------------------------------------
 -- Drawing
 ---------------------------------------------------------------------------
---- Which player holds ticket number `ticket`: players in name order, consecutive numbers.
-function Lottery.Owner(list, ticket)
+--- The players holding tickets, in name order.
+local function Names(list)
     local names = {}
     for name, n in pairs(list) do if n > 0 then names[#names + 1] = name end end
     table.sort(names)
+    return names
+end
+
+--- Which player holds ticket number `ticket`: players in `order` (names; default name order),
+--- each holding the next block of numbers.
+function Lottery.Owner(list, ticket, order)
     local upto = 0
-    for _, name in ipairs(names) do
-        upto = upto + list[name]
+    for _, name in ipairs(order or Names(list)) do
+        upto = upto + (list[name] or 0)
         if ticket <= upto then return name end
     end
 end
 
---- Tells me I won (once), whenever I find out.
+--- Puts the names in a random order (replaced in tests).
+function Lottery.Shuffle(names)
+    for i = #names, 2, -1 do
+        local j = math.random(1, i)
+        names[i], names[j] = names[j], names[i]
+    end
+    return names
+end
+
+--- { { name, n, lo, hi } } in order: who holds which ticket numbers.
+function Lottery.Lineup(list, order)
+    local out, upto = {}, 0
+    for _, name in ipairs(order) do
+        local n = list[name] or 0
+        if n > 0 then
+            out[#out + 1] = { name = name, n = n, lo = upto + 1, hi = upto + n }
+            upto = upto + n
+        end
+    end
+    return out, upto
+end
+
+--- The leaderboard: my result in a drawn lottery (once), from the ticket list the draw used.
+--- The gold moved by mail, so it's recorded as already settled - never as a debt - and as its
+--- own kind, so it moves net gold and wagered on the leaderboard, not games, wins or streaks.
+local function RecordMine(L)
+    if not L or L.state ~= "drawn" or not L.drawn or Lottery.Revealing(L) then return end
+    local n = L.drawn[ns.Me()]
+    if not n or n <= 0 then return end
+    ns.charDB.lotteryRecorded = ns.charDB.lotteryRecorded or {}
+    if ns.charDB.lotteryRecorded[L.id] then return end
+    ns.charDB.lotteryRecorded[L.id] = true
+    local stake = n * (L.price or 0)
+    local won = L.winner ~= "" and ns.IsMe(L.winner)
+    local list = ns.charDB.ledger
+    list[#list + 1] = {
+        kind = "lottery", game = "lottery", id = "lottery:" .. L.id, opponent = L.pot,
+        net = won and ((L.potGold or 0) - stake) or -stake, wager = stake, result = won and 1 or -1,
+        verified = true, settled = true, time = time(),
+    }
+    while #list > (ns.db.maxLedger or 500) do table.remove(list, 1) end
+    if ns.Board then ns.Board.Changed() end
+end
+Lottery.RecordMine = RecordMine
+
+--- Tells me I won (once), whenever I find out. (Also puts my result on the leaderboard.)
 local function TellWinner(L)
+    RecordMine(L)
     if not L or not L.winner or L.winner == "" or not ns.IsMe(L.winner) then return end
     ns.charDB.lotteryWon = ns.charDB.lotteryWon or {}
     if ns.charDB.lotteryWon[L.id] then return end
@@ -583,22 +638,41 @@ local function Applies(L, f)
 end
 
 ---------------------------------------------------------------------------
--- The show around the draw (display only: the roll and the result don't depend on it).
--- Clicking Draw starts a countdown on every addon online; when the result comes in, the
--- number spins for REVEAL seconds, and only then is the winner told in chat and guild chat.
+-- The show around the draw. Clicking Draw: everyone's addon shows "collecting tickets" for
+-- SYNC_WAIT seconds; then the drawer freezes the ticket list, shuffles the players and sends
+-- the numbered list (who holds which numbers) to everyone, and everyone sees their numbers for
+-- the COUNTDOWN seconds before the roll. When the result comes in, the number spins for REVEAL
+-- seconds, and only then is the winner told in chat and guild chat.
 ---------------------------------------------------------------------------
-Lottery.countdown = nil -- { id, ends (GetTime), by } while a draw is counting down here
+Lottery.countdown = nil -- { id, ends (GetTime of the roll), by, phase = "collect" | "numbers" }
 Lottery.revealing = nil -- { id, ends (GetTime) } while the draw's number is spinning
+Lottery.lineup = nil    -- { id, list = { { name, n, lo, hi } }, total }: the draw's numbers
 
 local function EndCountdown(L)
     if Lottery.countdown and L and Lottery.countdown.id == L.id then Lottery.countdown = nil end
 end
 
---- Seconds until the draw's roll (0 or less: rolling now), or nil if no draw is counting down.
+--- Seconds until the draw's roll (0 or less: rolling now) and the phase ("collect" while the
+--- tickets are being collected, "numbers" once everyone has their numbers), or nil.
 function Lottery.Countdown(L)
     local c = Lottery.countdown
     if not c or not L or c.id ~= L.id or L.state ~= "open" then return nil end
-    return c.ends - GetTime()
+    return c.ends - GetTime(), c.phase
+end
+
+--- The draw's numbered list for lottery L, or nil.
+function Lottery.LineupOf(L)
+    local u = Lottery.lineup
+    if u and L and u.id == L.id then return u end
+end
+
+--- name's ticket numbers in the draw (lo, hi), or nil.
+function Lottery.NumbersOf(L, name)
+    local u = Lottery.LineupOf(L)
+    if not u then return nil end
+    for _, e in ipairs(u.list) do
+        if ns.SameName(e.name, name) then return e.lo, e.hi end
+    end
 end
 
 --- True while the draw's number is still spinning (the winner isn't shown yet).
@@ -613,10 +687,12 @@ function Lottery.RevealLeft(L)
     return Lottery.revealing.ends - GetTime()
 end
 
-local function StartCountdown(L, secs, by)
-    local c = { id = L.id, ends = GetTime() + secs, by = by }
+--- secs: until the roll. phase: "collect" (Draw was just clicked) or "numbers" (we only heard
+--- about the draw from its numbered list).
+local function StartCountdown(L, secs, by, phase)
+    local c = { id = L.id, ends = GetTime() + secs, by = by, phase = phase or "collect" }
     Lottery.countdown = c
-    ns.Log("|cffffd100The guild lottery is being drawn in %d seconds|r - open the lottery on the Live tab to watch!", secs)
+    ns.Log("|cffffd100The guild lottery draw has started|r - open the lottery on the Live tab to watch!")
     if not ns.IsMe(by) then ns.Sound("invite") end
     if ns.LotteryUI and ns.LotteryUI.ShowCountdown then ns.LotteryUI.ShowCountdown(L) end
     -- the drawer's addon says so itself if the roll never comes; everyone else hears it here
@@ -629,6 +705,61 @@ local function StartCountdown(L, secs, by)
         Changed()
     end)
 end
+
+--- The numbered list is in: everyone has their numbers for the last `secs` seconds.
+local function TakeLineup(L, list, total, secs, by)
+    Lottery.lineup = { id = L.id, list = list, total = total }
+    local c = Lottery.countdown
+    if c and c.id == L.id then
+        c.ends, c.phase = GetTime() + secs, "numbers"
+    else
+        StartCountdown(L, secs, by, "numbers")
+    end
+    local lo, hi = Lottery.NumbersOf(L, ns.Me())
+    if lo then
+        ns.Log("|cffffd100Your lottery numbers: %s|r (of %d tickets) - the roll is in %d seconds.",
+            lo == hi and tostring(lo) or (lo .. "-" .. hi), total, secs)
+    end
+    if ns.LotteryUI and ns.LotteryUI.ShowCountdown then ns.LotteryUI.ShowCountdown(L) end
+    Changed()
+end
+
+--- The numbered list goes out in parts, in order: "name:tickets;name:tickets;...".
+local function SendLineup(L, list, total)
+    local items = {}
+    for _, e in ipairs(list) do items[#items + 1] = e.name .. ":" .. e.n end
+    Batches(items, function(i, n, part)
+        Comm.Send("LOT_ORDER", { id = L.id, i = i, n = n, b = part, t = total, w = Lottery.COUNTDOWN }, nil)
+    end)
+end
+
+local orderParts = {} -- sender .. id -> { [i] = part }
+
+Comm.On("LOT_ORDER", function(f, sender)
+    local L = Lottery.Current()
+    if not L or L.id ~= f.id or L.state ~= "open" or ns.IsMe(sender) then return end
+    if Now() < L.drawAt - 300 then return end
+    local key = sender .. "|" .. tostring(f.id)
+    local parts = orderParts[key] or {}
+    orderParts[key] = parts
+    parts[tonumber(f.i) or 1] = f.b or ""
+    local n = tonumber(f.n) or 1
+    for i = 1, n do if not parts[i] then return end end
+    orderParts[key] = nil
+    local counts, order = {}, {}
+    for i = 1, n do
+        for name, k in parts[i]:gmatch("([^:;]+):(%d+)") do
+            name = ns.Full(name)
+            if not counts[name] then order[#order + 1] = name end
+            counts[name] = tonumber(k)
+        end
+    end
+    local list, total = Lottery.Lineup(counts, order)
+    if total ~= tonumber(f.t) then return end -- a part went missing or wrong: show no numbers
+    local w = tonumber(f.w) or Lottery.COUNTDOWN
+    if w <= 0 or w > 60 then return end
+    TakeLineup(L, list, total, w, sender)
+end)
 
 --- Runs tell() once the draw's number has landed (straight away if there's nothing to spin).
 local function Reveal(L, tell)
@@ -690,6 +821,7 @@ Comm.On("LOT_DL", function(f, sender)
     end
     L.drawn, L.drawnParts = list, nil
     CheckMissed(L)
+    RecordMine(L) -- (not while the number is still spinning: the leaderboard would give it away)
     Changed()
 end)
 
@@ -752,19 +884,43 @@ function Lottery.Draw(force)
         return false
     end
     Lottery.drawing = true
-    Comm.Send("LOT_SYNC", { id = L.id, w = Lottery.SYNC_WAIT }, nil)
-    StartCountdown(L, Lottery.SYNC_WAIT, ns.Me())
+    -- w: seconds until the roll (2.2.0 addons count down to it; newer ones also wait for the numbers)
+    local untilRoll = Lottery.SYNC_WAIT + Lottery.COUNTDOWN
+    Comm.Send("LOT_SYNC", { id = L.id, w = untilRoll }, nil)
+    StartCountdown(L, untilRoll, ns.Me())
     Changed()
-    C_Timer.After(Lottery.SYNC_WAIT, function() Lottery.Roll(L) end)
+    C_Timer.After(Lottery.SYNC_WAIT, function() Lottery.Freeze(L) end)
     return true
 end
 
---- Step 2 of the draw: the roll itself, over the tickets as they are now.
-function Lottery.Roll(L)
+--- Step 2 of the draw: freeze the tickets, shuffle the players and give out the numbers.
+--- Nothing changes after this: the roll, COUNTDOWN seconds later, is over exactly this list.
+function Lottery.Freeze(L)
     if L ~= Lottery.Current() or L.state ~= "open" then Lottery.drawing = false EndCountdown(L) Changed() return end
     local snapshot = {}
     local total = 0
     for _, e in ipairs(Lottery.Players(L)) do snapshot[e.name] = e.n total = total + e.n end
+    if total == 0 then return Lottery.Roll(L, { snapshot = snapshot, order = {}, total = 0 }) end
+    local list
+    list, total = Lottery.Lineup(snapshot, Lottery.Shuffle(Names(snapshot)))
+    local order = {}
+    for i, e in ipairs(list) do order[i] = e.name end
+    SendLineup(L, list, total)
+    TakeLineup(L, list, total, Lottery.COUNTDOWN, ns.Me())
+    local frozen = { snapshot = snapshot, order = order, total = total }
+    C_Timer.After(Lottery.COUNTDOWN, function() Lottery.Roll(L, frozen) end)
+end
+
+--- Step 3: the roll itself, over the frozen list (or, without one, the tickets as they are now
+--- in name order).
+function Lottery.Roll(L, frozen)
+    if L ~= Lottery.Current() or L.state ~= "open" then Lottery.drawing = false EndCountdown(L) Changed() return end
+    local snapshot, order, total = {}, nil, 0
+    if frozen then
+        snapshot, order, total = frozen.snapshot, frozen.order, frozen.total
+    else
+        for _, e in ipairs(Lottery.Players(L)) do snapshot[e.name] = e.n total = total + e.n end
+    end
     if total == 0 then
         L.drawn = {}
         ApplyResult(L, { w = "", r = 0, n = 0, g = 0, at = Now(), by = ns.Me() })
@@ -784,7 +940,7 @@ function Lottery.Roll(L)
             done = true
             Lottery.drawing = false
             if L ~= Lottery.Current() or L.state ~= "open" then return end
-            local winner = Lottery.Owner(snapshot, v)
+            local winner = Lottery.Owner(snapshot, v, order)
             ApplyResult(L, { w = winner, r = v, n = total, g = total * L.price, at = Now(), by = ns.Me() })
             L.drawn = snapshot
             CheckMissed(L)

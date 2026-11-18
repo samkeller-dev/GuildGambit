@@ -5,6 +5,13 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.3.0 - 2026-11-18
+
+- **Double or nothing is really double or nothing.** It used to just double the last stake, so after losing 3g a double or nothing was played for 6g, and winning it left you 3g up instead of even. Now it's played for what the run of back-to-back games stands at: lose 3g, and double or nothing is for 3g, so you end up owing 6g or nothing. Lose that too and the next one is for 6g. Once someone wins it back to nothing, only Rematch is offered. Debts from other games aren't part of it. The button shows the stake. Rematch still uses the same stake and starts a new run. Group deathroll no longer offers double or nothing, since every player's total is different.
+- **The lottery counts on the leaderboard.** Once the draw's spin has landed, every player who had tickets gets the result in their net gold: the winner gains the pot minus what they put in, everyone else loses what they put in. What they put in also counts toward their total wagered. It doesn't count as a game, win, loss or streak, and it's never a debt: the gold already moved by mail. Players who only played the lottery now appear on the leaderboard too.
+- **See your lottery numbers before the roll.** When an officer clicks **Draw**, the addon collects everyone's tickets for 5 seconds, then freezes the list and shuffles the players. Every player gets a block of ticket numbers, and everyone is told who holds which. A 15-second countdown follows, with your numbers and everyone else's on screen the whole time. Your numbers are also posted in your chat. The roll is over exactly that list, and the winner's numbers show when the spin lands.
+- Players used to get their numbers in A-Z name order at the moment of the roll. Shuffling doesn't change anyone's odds: each ticket is still one number out of the total.
+
 ## 2.2.0 - 2026-11-18
 
 - **The lottery draw is now a show.** Clicking **Draw** starts a 15-second countdown on everyone's addon, with a chat line telling the guild to open the lottery on the Live tab to watch. The lottery page shows the countdown, then the spin, on everyone's screen at once. Open the page partway through and you join the countdown or the spin where it's up to. The draw itself hasn't changed: it's still started by hand, and ticket sales still close 1h15m before.

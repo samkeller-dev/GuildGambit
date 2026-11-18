@@ -127,6 +127,14 @@ local function BuildDraw(v)
     d.result = Label(d, "", "GameFontNormalLarge")
     d.result:SetPoint("TOP", d.outof, "BOTTOM", 0, -16)
     d.result:SetJustifyH("CENTER")
+    -- the draw's numbers: mine (big) and everyone's (small, above the Close button)
+    d.mine = Label(d, "", "GameFontNormalLarge")
+    d.mine:SetPoint("TOP", d.result, "BOTTOM", 0, -10)
+    d.mine:SetJustifyH("CENTER")
+    d.list = Label(d, "", "GameFontHighlightSmall")
+    d.list:SetPoint("BOTTOMLEFT", 20, 46)
+    d.list:SetPoint("BOTTOMRIGHT", -20, 46)
+    d.list:SetJustifyH("CENTER")
     d.close = Button(d, "Close", 80, function()
         -- closed by hand: don't bring this countdown or spin back on the next refresh
         d.closedFor = ns.Lottery.countdown or ns.Lottery.revealing
@@ -144,10 +152,21 @@ local function BuildDraw(v)
         local a = rawget(self, "anim")
         local count = rawget(self, "count")
         if not a and count then
-            -- the countdown before the roll
-            local left = ns.Lottery.Countdown(ns.Lottery.Current())
+            -- before the roll: collecting the tickets, then the countdown with everyone's numbers
+            local L = ns.Lottery.Current()
+            local left, phase = ns.Lottery.Countdown(L)
             if not left then self.count = nil self:Hide() return end
-            if left > 0 then
+            if phase ~= count.phase then
+                count.phase, count.shown = phase, nil
+                LUI.ShowNumbers(self, L)
+            end
+            if phase == "collect" then
+                if count.shown ~= "c" then
+                    count.shown = "c"
+                    self.cap:SetText("Collecting everyone's tickets...")
+                    self.number:SetText("")
+                end
+            elseif left > 0 then
                 local s = math.ceil(left)
                 if s ~= count.shown then
                     count.shown = s
@@ -185,13 +204,40 @@ local function BuildDraw(v)
             self.number:SetTextColor(1, 0.84, 0.25)
             self.pop:Stop() self.pop:Play()
             self.cap:SetText("Winning ticket")
-            self.result:SetText(("|cff20ff20%s|r wins %s!"):format(ns.Short(a.winner), ns.Money(a.pot)))
+            local lo, hi = ns.Lottery.NumbersOf(ns.Lottery.Current(), a.winner)
+            self.result:SetText(("|cff20ff20%s|r wins %s!%s"):format(ns.Short(a.winner), ns.Money(a.pot),
+                lo and (" |cffbbbbbb(numbers " .. LUI.Range(lo, hi) .. ")|r") or ""))
             if ns.IsMe(a.winner) then ns.Sound("bigwin") else ns.Sound("win") end
         elseif a.t > LUI.SPIN + LUI.HOLD then
             self.anim = nil
             self:Hide()
         end
     end)
+end
+
+--- "7-9", or "7" for one ticket.
+function LUI.Range(lo, hi) return lo == hi and tostring(lo) or (lo .. "-" .. hi) end
+
+LUI.LIST_MAX = 30 -- players named in the overlay's list of numbers
+
+--- The draw's numbers on the overlay: mine, and everyone's (nothing until the list is frozen).
+function LUI.ShowNumbers(d, L)
+    local u = ns.Lottery.LineupOf(L)
+    if not u then d.mine:SetText("") d.list:SetText("") return end
+    local lo, hi = ns.Lottery.NumbersOf(L, ns.Me())
+    d.mine:SetText(lo and ("Your numbers: |cffffffff" .. LUI.Range(lo, hi) .. "|r")
+        or "|cff888888You have no tickets in this draw.|r")
+    d.outof:SetText(("%d ticket%s in the draw"):format(u.total, u.total == 1 and "" or "s"))
+    local parts = {}
+    for i, e in ipairs(u.list) do
+        if i > LUI.LIST_MAX then
+            parts[#parts + 1] = ("+%d more"):format(#u.list - LUI.LIST_MAX)
+            break
+        end
+        local text = ns.Short(e.name) .. " " .. LUI.Range(e.lo, e.hi)
+        parts[#parts + 1] = ns.IsMe(e.name) and ("|cffffd100" .. text .. "|r") or text
+    end
+    d.list:SetText(table.concat(parts, "    "))
 end
 
 --- Plays the draw for whoever has the lottery page open (from the drawer, the result arriving,
@@ -204,6 +250,8 @@ function LUI.PlayDraw(L, from)
         pot = L.potGold or 0 }
     d.cap:SetText("Drawing the lottery...")
     d.result:SetText("")
+    LUI.ShowNumbers(d, L) -- my numbers stay up while it spins
+    d.list:SetText("")
     d.outof:SetText(("out of %d ticket%s"):format(L.drawnTotal or 1, (L.drawnTotal or 1) == 1 and "" or "s"))
     d:Show()
 end
@@ -213,12 +261,13 @@ function LUI.ShowCountdown(L)
     if not view or not view:IsVisible() or not ns.Lottery.Countdown(L) then return end
     local d = view.drawAnim
     if rawget(d, "anim") then return end -- a spin is already showing
-    d.count = { shown = nil }
-    local n = ns.Lottery.Totals(L)
-    d.cap:SetText("Drawing the lottery in")
+    local _, phase = ns.Lottery.Countdown(L)
+    d.count = { shown = nil, phase = phase }
+    d.cap:SetText(phase == "collect" and "Collecting everyone's tickets..." or "Drawing the lottery in")
     d.number:SetText("")
-    d.outof:SetText(("%d ticket%s in the draw"):format(n, n == 1 and "" or "s"))
+    d.outof:SetText("")
     d.result:SetText("")
+    LUI.ShowNumbers(d, L)
     d:Show()
 end
 

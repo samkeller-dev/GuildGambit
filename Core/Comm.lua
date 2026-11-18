@@ -162,6 +162,8 @@ function Comm.OnAddonMessage(prefix, text, channel, sender)
     if ns.House and ns.House.SeePeer then ns.House.SeePeer(sender) end -- they have the addon
     local handler = Comm.handlers[msgType]
     ns.Debug("<- %s %s", ns.Short(sender), text)
+    -- a rematch / double-or-nothing invite (any game): remember which, for the run total
+    if fields.rm and fields.id and ns.Games and ns.Games.invites then ns.Games.invites[fields.id] = fields.rm end
     if handler then
         local ok, err = pcall(handler, fields, sender, channel)
         if not ok then ns.Print("|cffff4040error handling %s: %s|r", msgType, tostring(err)) end

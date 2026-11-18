@@ -63,6 +63,17 @@ function Games.Finish(game, net, summary, outcome)
     local practice = game.practice
     outcome = outcome or (net > 0 and 1 or net < 0 and -1 or 0)
     game.outcome = outcome
+    -- the double-or-nothing run: a double or nothing adds to the run it came from; anything else
+    -- (a first game, a plain rematch) starts a new run with its own result
+    local tag = game.rematch or Games.invites[game.id]
+    Games.invites[game.id] = nil
+    local prev = Games.last
+    if tag == "d" and prev and prev.finished and prev.runNet and prev.kind == game.kind
+        and ns.SameName(prev.opponent or "", game.opponent or "") then
+        game.runNet = prev.runNet + net
+    else
+        game.runNet = net
+    end
     ns.Ledger.Record({
         id = game.id, game = game.kind, opponent = game.opponent, net = net, result = outcome,
         wager = game.wagered or game.bet or game.stake or 0,
@@ -143,16 +154,30 @@ end
 
 local function Stake(g) return g.bet or g.stake or 0 end
 
---- True if double or nothing makes sense (there was gold on it).
-function Games.CanDouble()
+--- Double or nothing: bet what the run of back-to-back games stands at (+/- from my side), so
+--- the run ends up either doubled or at nothing. Debts from other games aren't part of it.
+--- Returns the stake in copper, or nil when there's nothing to double (the run is at nothing).
+function Games.DoubleStake()
     local g = Games.RematchOf()
-    return g ~= nil and Stake(g) > 0 and Stake(g) * 2 <= ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD
+    -- a group deathroll has a different total for every player: no double or nothing there
+    if not g or g.kind == "groupdr" then return nil end
+    local stake = math.abs(g.runNet or g.net or 0)
+    if stake <= 0 or stake > ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD then return nil end
+    return stake
+end
+
+Games.invites = {} -- game id -> rematch tag ("r" / "d") from invites we received
+
+--- True if double or nothing makes sense (the run isn't at nothing).
+function Games.CanDouble()
+    return Games.DoubleStake() ~= nil
 end
 
 function Games.Rematch(double)
     local g = Games.RematchOf()
     if not g then return nil end
-    local stake = Stake(g) * (double and 2 or 1)
+    if double and not Games.DoubleStake() then return nil end
+    local stake = double and Games.DoubleStake() or Stake(g)
     local money = stake .. "c"
     local target = g.practice and "practice" or g.opponent
     Games.rematchTag = (not g.practice) and (double and "d" or "r") or nil
@@ -168,6 +193,7 @@ function Games.Rematch(double)
     end)
     Games.rematchTag = nil
     if not ok then ns.Print("|cffff4040rematch failed: %s|r", tostring(game)) return nil end
+    if type(game) == "table" then game.rematch = double and "d" or "r" end -- (practice too)
     return game
 end
 
