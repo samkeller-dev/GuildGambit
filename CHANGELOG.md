@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.1 - 2026-11-19
+
+- **Cleanup: everything unused is gone.** The retired Slots game (its code, table and symbol pictures), the Kodo Crossing duel code (retired in 2.4.0), unused coin pictures and a few unused functions have been removed - about 1,300 lines and 18 image files, so the download is smaller. Nothing you can use changes: Kodo Crossing is still in the Arcade, and `/gg kodo` opens it. A Kodo duel invite from an older version is still turned down politely.
+
 ## 2.4.0 - 2026-11-19
 
 - **Kodo Crossing is arcade-only.** It's no longer a gambling game: play it for fun in the Arcade tab, with its high scores on the leaderboard as before. Kodo duels can't be started any more (the Play tab button, `/gg kodo`, the right-click menu and rematch are gone), and a duel invite from an older version is turned down. Past Kodo results stay in your ledger.

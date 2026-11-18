@@ -68,19 +68,8 @@ commands.dr = function(...)
 end
 commands.deathroll = commands.dr
 
--- Slots was retired in 1.7.0, replaced by Kodo Crossing
-commands.slots = function()
-    ns.Print("Slots has been retired - try a deathroll, blackjack or coinflip instead.")
-end
-commands.spin = commands.slots
-
--- Kodo Crossing duels were retired in 2.4.0: the game is in the Arcade, just for fun
-commands.kodo = function()
-    ns.Print("Kodo Crossing duels have been retired - play it in the Arcade instead.")
-    ns.UI.SetShown(true)
-    ns.UI.SelectTab("arcade")
-end
 commands.arcade = function() ns.UI.SetShown(true) ns.UI.SelectTab("arcade") end
+commands.kodo = commands.arcade
 commands.wealth = function(...)
     local name = table.concat({ ... }, " ")
     if name ~= "" then ns.WealthUI.ShowPlayer(name) else ns.WealthUI.Toggle() end

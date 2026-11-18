@@ -1,6 +1,6 @@
 -- UI/Window.lua: the GuildGambit window. Everything here is also reachable by /gg commands,
 -- so a broken layout never blocks a game.
--- Skin: Blizzard's gold dialog border and header (game textures). Cards, reels and frames: our
+-- Skin: Blizzard's gold dialog border and header (game textures). Cards and frames: our
 -- art in Media/, with the game's portrait icons and elite dragon frames layered on top.
 local ADDON_NAME, ns = ...
 local Art = ns.Art
@@ -73,8 +73,6 @@ end
 ---------------------------------------------------------------------------
 -- Play: controls, the game table and actions
 ---------------------------------------------------------------------------
-local REEL = 64
-
 local function BuildTable(p, y)
     y = y or -92
     local t = CreateFrame("Frame", nil, p, "BackdropTemplate")
@@ -108,53 +106,6 @@ local function BuildTable(p, y)
     t.bj.playerLabel:SetPoint("TOPLEFT", 12, -152)
     t.bj.player = ns.Cards.CreateRow(t.bj, 80, 6)
     t.bj.player:SetPoint("TOPLEFT", 12, -170)
-
-    -- slots: your three reels (bottom) and your opponent's (top), each in gold rings
-    t.slots = CreateFrame("Frame", nil, t)
-    t.slots:SetAllPoints()
-    local function ReelRow(y)
-        local row = {}
-        for i = 1, 3 do
-            local ring = Tex(t.slots, "OVERLAY", Art.Tex("frames/ring_gold"), REEL / Art.RING.d)
-            local icon = Tex(t.slots, "ARTWORK", nil, REEL)
-            icon:SetPoint("CENTER", t.slots, "CENTER", (i - 2) * (REEL + 52), y)
-            ring:SetPoint("TOPLEFT", icon, "CENTER", -Art.RING.cx * ring:GetWidth(), Art.RING.cy * ring:GetHeight())
-            row.rings = row.rings or {}
-            row.rings[i] = ring
-            row[i] = icon
-        end
-        return row
-    end
-    t.slots.theirReels = ReelRow(110)
-    t.slots.theirLabel = Label(t.slots, "", "GameFontNormal")
-    t.slots.theirLabel:SetPoint("TOP", 0, -6)
-    t.slots.theirLabel:SetJustifyH("CENTER")
-    t.slots.reels = ReelRow(12)
-    t.slots.result = Label(t.slots, "", "GameFontNormal")
-    t.slots.result:SetPoint("CENTER", 0, -36)
-    t.slots.result:SetJustifyH("CENTER")
-
-    -- paytable legend: every winning line with its reels and multiplier
-    local legend = CreateFrame("Frame", nil, t.slots)
-    legend:SetPoint("BOTTOMLEFT", 10, 8)
-    legend:SetPoint("BOTTOMRIGHT", -10, 8)
-    legend:SetHeight(96)
-    local title = Label(legend, "|cffffd100Pays (times your bet)|r", "GameFontNormalSmall")
-    title:SetPoint("TOPLEFT", 0, 0)
-    local ICON, ROW = 18, 19
-    for n, line in ipairs(ns.Rules.Slots.PAYTABLE) do
-        local col, row = (n - 1) % 2, math.floor((n - 1) / 2)
-        local x, y = col * 210, -16 - row * ROW
-        for k, sym in ipairs(line.icons) do
-            local ic = Tex(legend, "ARTWORK", Art.Tex("icons/" .. sym:lower()), ICON)
-            ic:SetPoint("TOPLEFT", x + (k - 1) * (ICON + 2), y)
-        end
-        local text = Label(legend, ("|cffffffffx%d|r  %s%s"):format(line.mult, line.name,
-            #line.icons < 3 and " (any spot)" or ""), "GameFontHighlightSmall")
-        text:SetPoint("TOPLEFT", x + 3 * (ICON + 2) + 4, y - 3)
-    end
-    local nothing = Label(legend, "|cff888888Anything else pays nothing.|r", "GameFontHighlightSmall")
-    nothing:SetPoint("TOPLEFT", 210, -16 - 3 * ROW - 3)
 
     -- deathroll: only the latest roll, big in the middle. It pops in with a gold flash, is
     -- coloured by how close to 1 it is, and a skull behind it grows (and pulses) as the
@@ -919,7 +870,7 @@ end
 
 ---------------------------------------------------------------------------
 -- Live: games other guildies are playing right now, and watching one on the same table
--- the players see (the big deathroll number, the cards, the reels, the coin).
+-- the players see (the big deathroll number, the cards, the coin).
 ---------------------------------------------------------------------------
 local LIVE_ROWS, LIVE_ROW_H = 4, 22
 
@@ -1088,71 +1039,9 @@ end
 ---------------------------------------------------------------------------
 -- Refresh
 ---------------------------------------------------------------------------
--- Kodo Crossing duel: both runs' scores side by side, counting up live.
-local function BuildKodo(t)
-    local kd = CreateFrame("Frame", nil, t)
-    t.kd = kd
-    kd:SetAllPoints()
-    kd.title = Label(kd, "", "GameFontNormalLarge")
-    kd.title:SetPoint("TOP", 0, -18)
-    kd.title:SetJustifyH("CENTER")
-    kd.kodo = kd:CreateTexture(nil, "ARTWORK")
-    if not pcall(kd.kodo.SetTexture, kd.kodo, Art.Tex("arcade/kodo"), nil, nil, "NEAREST") then
-        kd.kodo:SetTexture(Art.Tex("arcade/kodo"))
-    end
-    kd.kodo:SetSize(128, 64)
-    kd.kodo:SetPoint("CENTER", 0, 22)
-    kd.kodo:SetAlpha(0.35)
-    kd.vs = Label(kd, "VS", "GameFontNormalHuge")
-    kd.vs:SetPoint("CENTER", 0, 0)
-    kd.sides = {}
-    for i, s in ipairs({ "a", "b" }) do
-        local x = i == 1 and -110 or 110
-        local side = {}
-        side.name = Label(kd, "", "GameFontNormalLarge")
-        side.name:SetPoint("CENTER", x, 64)
-        side.score = kd:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-        pcall(side.score.SetFont, side.score, "Fonts\\FRIZQT__.TTF", 64, "THICKOUTLINE")
-        side.score:SetPoint("CENTER", x, 4)
-        side.state = Label(kd, "", "GameFontHighlight")
-        side.state:SetPoint("CENTER", x, -46)
-        kd.sides[s] = side
-    end
-    kd.result = Label(kd, "", "GameFontNormalLarge")
-    kd.result:SetPoint("BOTTOM", 0, 26)
-    kd.result:SetWidth(W - 80)
-    kd.result:SetJustifyH("CENTER")
-end
-
-local function RefreshKodo(kd, game)
-    local function nm(n) return ns.IsMe(n) and "You" or ns.Short(n) end
-    kd.title:SetText(("Kodo Crossing  -  %s"):format(ns.Stake(game.bet or 0)))
-    local scores, done = game.scores or { a = 0, b = 0 }, game.finishedRun or {}
-    local bothDone = done.a and done.b
-    for _, s in ipairs({ "a", "b" }) do
-        local side, other = kd.sides[s], s == "a" and "b" or "a"
-        local sc = scores[s] or 0
-        side.name:SetText(nm(s == "a" and game.a or game.b))
-        side.score:SetText(tostring(sc))
-        if bothDone and sc > (scores[other] or 0) then side.score:SetTextColor(0.2, 1, 0.2)
-        elseif bothDone and sc < (scores[other] or 0) then side.score:SetTextColor(1, 0.3, 0.3)
-        else side.score:SetTextColor(1, 0.84, 0.25) end
-        side.state:SetText(game.state == "invite" and "|cff888888waiting...|r"
-            or (done[s] and "|cffffd100final|r" or "|cff20ff20running...|r"))
-    end
-    if bothDone then
-        local a, b = scores.a or 0, scores.b or 0
-        kd.result:SetText(a == b and "|cffffd100A tie - push!|r" or ("|cff20ff20%s %s!|r"):format(
-            nm(a > b and game.a or game.b), (ns.IsMe(a > b and game.a or game.b)) and "win" or "wins"))
-    else
-        kd.result:SetText("")
-    end
-end
-
 local function ShowView(t, which)
     if not rawget(t, "cf") then BuildCoin(t) end
-    if not rawget(t, "kd") then BuildKodo(t) end
-    for _, key in ipairs({ "idle", "bj", "slots", "dr", "cf", "kd" }) do t[key]:SetShown(key == which) end
+    for _, key in ipairs({ "idle", "bj", "dr", "cf" }) do t[key]:SetShown(key == which) end
 end
 
 local function RefreshTable(p, game)
@@ -1175,37 +1064,6 @@ local function RefreshTable(p, game)
         local me = (game.spectator and ns.Short(game.b)) or (game.asHouse and ns.Short(game.player)) or "You"
         local myValue = #game.p > 0 and (duel and ns.Blackjack.DuelValueText(game.p) or BJ.ValueText(game.p)) or ""
         t.bj.playerLabel:SetText(me .. (myValue ~= "" and ("  -  " .. myValue) or "") .. (myDoubled and "  (doubled)" or ""))
-    elseif game.kind == "slots" then
-        ShowView(t, "slots")
-        local function ShowReels(row, result)
-            local reels = result and result.reels
-            for i = 1, 3 do
-                local sym = reels and reels[i]
-                row[i]:SetTexture(Art.Tex("icons/" .. (sym and sym:lower() or "seven")))
-                row[i]:SetDesaturated(not sym)
-                row[i]:SetAlpha(sym and 1 or 0.35)
-            end
-        end
-        local function Name(result)
-            return result and (result.name .. (result.mult > 0 and ("  x" .. result.mult) or "")) or nil
-        end
-        local duel = game.mode == "duel"
-        -- the opponent's row only exists in a 1v1 game
-        for i = 1, 3 do
-            t.slots.theirReels[i]:SetShown(duel)
-            t.slots.theirReels.rings[i]:SetShown(duel)
-        end
-        if duel then
-            ShowReels(t.slots.theirReels, game.theirResult)
-            local theirSide = ns.IsMe(game.a) and "b" or "a"
-            t.slots.theirLabel:SetText(ns.Short(game.opponent) .. ":  "
-                .. (ns.Slots.Line(game, theirSide) or "waiting to spin..."))
-        else
-            t.slots.theirLabel:SetText("")
-        end
-        ShowReels(t.slots.reels, game.result)
-        local mySide = duel and (ns.IsMe(game.a) and "a" or "b")
-        t.slots.result:SetText((game.spectator and (ns.Short(game.b) .. ":  ") or "You:  ") .. ((duel and ns.Slots.Line(game, mySide)) or Name(game.result) or "Spin to play!"))
     elseif game.kind == "coinflip" then
         ShowView(t, "cf")
         RefreshCoin(t.cf, game)
@@ -1216,9 +1074,6 @@ local function RefreshTable(p, game)
     elseif game.kind == "groupdr" then
         ShowView(t, "dr")
         RefreshGroup(t.dr, game)
-    elseif game.kind == "kodo" then
-        ShowView(t, "kd")
-        RefreshKodo(t.kd, game)
     end
 end
 
@@ -1389,65 +1244,6 @@ local function RefreshBoard(p)
         or (mine and ("You are #%d of %d players."):format(mine, #ranked) or "Play a game to join the board."))
 end
 
--- Watching a Kodo Crossing duel: both runs side by side, replayed live from each player's
--- hops on the same seeded lanes (half size).
-local WATCH_SCALE = 0.5
-
-local function BuildKodoWatch(p)
-    if rawget(p, "kodoView") then return p.kodoView end
-    local v = CreateFrame("Frame", nil, p)
-    p.kodoView = v
-    v:SetPoint("TOPLEFT", p.table, "TOPLEFT", 0, 0)
-    v:SetPoint("BOTTOMRIGHT", p.table, "BOTTOMRIGHT", 0, 0)
-    v.engines, v.labels, v.watching = {}, {}, false
-    local A = ns.Arcade
-    local w, h = A.COLS * A.TILE * WATCH_SCALE, A.VIEW_ROWS * A.TILE * WATCH_SCALE
-    for i, side in ipairs({ "a", "b" }) do
-        local holder = CreateFrame("Frame", nil, v)
-        holder:SetSize(w, h)
-        holder:SetPoint("BOTTOM", v, "BOTTOM", (i == 1 and -1 or 1) * (w / 2 + 6), 4)
-        local e = A.NewEngine({ spectator = true })
-        local canvas = e:BuildCanvas(holder)
-        canvas:SetScale(WATCH_SCALE)
-        canvas:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, 0)
-        e:New()
-        v.engines[side] = e
-        local label = Label(v, "", "GameFontNormal")
-        label:SetPoint("BOTTOM", holder, "TOP", 0, 6)
-        label:SetWidth(w + 10)
-        label:SetJustifyH("CENTER")
-        v.labels[side] = label
-    end
-    v:SetScript("OnUpdate", function(_, elapsed)
-        for _, e in pairs(v.engines) do
-            if e.g and e.g.queue then e:Replay(elapsed) end
-            e:Render()
-        end
-    end)
-    v:Hide()
-    return v
-end
-
---- A spectator just tuned in to one side of a duel (from Core/House.lua's RUNS handler).
-function UI.FollowRun(side, run)
-    local p = panels.live
-    if not p or not run.seed then return end
-    local v = BuildKodoWatch(p)
-    -- the replays now belong to this duel (so the first table update doesn't clear them)
-    if v.watching ~= ns.Live.watching then
-        v.watching = ns.Live.watching
-        for _, e in pairs(v.engines) do e:New() end
-    end
-    v.engines[side]:Follow(run.seed, run.char or "gnome", run.snap)
-end
-
---- More hops for one side of the duel we're watching.
-function UI.FeedRun(side, events, knownTime)
-    local p = panels.live
-    local v = p and rawget(p, "kodoView")
-    if v then v.engines[side]:Feed(events, knownTime) end
-end
-
 local function RefreshLive(p)
     local Live = ns.Live
     local list = Live.List()
@@ -1482,14 +1278,12 @@ local function RefreshLive(p)
     local lot = rawget(p, "lottery")
     if lot then lot:SetShown(p.showLottery and not g) end
     if p.showLottery and not g and lot then
-        if rawget(p, "kodoView") then p.kodoView:Hide() end
         p.table:Hide() p.hint:Hide() p.stop:Hide()
         p.info:SetText("")
         ns.LotteryUI.Refresh()
         return
     end
     if not g then
-        if rawget(p, "kodoView") then p.kodoView:Hide() end
         p.table:Hide()
         p.hint:SetText(#list > 0 and "|cff888888Pick a game above to watch it live.|r" or "")
         if lottery and #list == 1 then p.hint:SetText("|cff888888Nobody in the guild is playing right now.|r") end
@@ -1499,26 +1293,7 @@ local function RefreshLive(p)
         return
     end
     p.stop:Show()
-    local kodo = g.mirror and g.mirror.kind == "kodo"
-    local v = kodo and BuildKodoWatch(p) or rawget(p, "kodoView")
-    if v then
-        -- a different duel than last time: clear the replays until the new runs arrive
-        if kodo and v.watching ~= g.id then
-            v.watching = g.id
-            for _, e in pairs(v.engines) do e:New() end
-        end
-        v:SetShown(kodo)
-    end
-    if kodo then
-        p.hint:Hide()
-        p.table:Hide()
-        local m = g.mirror
-        for _, side in ipairs({ "a", "b" }) do
-            local done = m.finishedRun and m.finishedRun[side]
-            v.labels[side]:SetText(("%s  |cffffffff%d|r%s"):format(ns.Short(side == "a" and m.a or m.b),
-                m.scores and m.scores[side] or 0, done and "  |cffffd100final|r" or ""))
-        end
-    elseif g.mirror then
+    if g.mirror then
         p.hint:Hide()
         p.table:Show()
         RefreshTable(p, g.mirror)

@@ -184,9 +184,7 @@ Comm.On("ROLL", function(f, sender) ns.Rolls.OnRelay(f, sender) end)
 
 Comm.On("CANCEL", function(f, sender)
     local game = ns.Games.Get(f.id)
-    -- (a Kodo Crossing duel only cancels before it starts; after that a run just ends)
-    if game and game.kind ~= "groupdr" and (game.kind ~= "kodo" or game.state == "invite")
-        and ns.SameName(game.opponent, sender) then
+    if game and game.kind ~= "groupdr" and ns.SameName(game.opponent, sender) then
         ns.Games.Cancel(game, "by " .. ns.Short(sender), true)
     end
 end)
@@ -194,7 +192,7 @@ end)
 ---------------------------------------------------------------------------
 -- Live games and spectators (kept in this file so it loads without changing the file list).
 --
--- Every real game (deathroll, group deathroll, blackjack, slots, coinflip) is announced to the
+-- Every real game (deathroll, group deathroll, blackjack, coinflip) is announced to the
 -- guild by ONE addon - the challenger's, or the group host's - with a LIVE message, repeated
 -- every LIVE_HEARTBEAT seconds while it runs and ended with LIVE_END. Guildies see them in the
 -- Live tab. Watching one sends WATCH to that addon, which then sends the watcher SPEC updates:
@@ -283,20 +281,6 @@ function Live.Describe(game)
                 (mine and not game.finished) and game.myHole or nil)
         end
         return h, line("a"), line("b")
-    elseif kind == "slots" and game.mode == "duel" then
-        local function line(side)
-            local sp = game.spins[side]
-            local last = sp.last and (", last " .. sp.last.name .. (sp.last.mult > 0 and (" x" .. sp.last.mult) or "")) or ""
-            return ("%s: x%d after %d/%d spins%s"):format(Name(side == "a" and game.a or game.b), sp.total, sp.count, game.n, last)
-        end
-        return h, line("a"), line("b")
-    elseif kind == "kodo" then
-        local function line(side)
-            local sc = game.scores and game.scores[side] or 0
-            local done = game.finishedRun and game.finishedRun[side]
-            return ("%s: %d %s"):format(Name(side == "a" and game.a or game.b), sc, done and "(final)" or "(running)")
-        end
-        return h, line("a"), line("b")
     elseif kind == "coinflip" then
         local CF = ns.Coinflip
         local call = game.call and CF.Label(game.call) or "?"
@@ -383,22 +367,11 @@ local function Tick()
             end
         end
     end
-    -- watching, but the table (or a duel run) hasn't arrived: a message must have been lost
+    -- watching, but the table hasn't arrived: a message must have been lost
     local w = Live.watching and Live.games[Live.watching]
-    if w and not w.ended and now - (w.askedAt or 0) >= Live.REASK then
-        local m = w.mirror
-        if not m then
-            w.askedAt = now
-            Comm.Send("WATCH", { id = w.id, v = 2 }, w.host)
-        elseif m.kind == "kodo" then
-            for _, side in ipairs({ "a", "b" }) do
-                local run = w.runs and w.runs[side]
-                if not run then
-                    w.askedAt = now
-                    Comm.Send("WATCH", { id = w.id, v = 2 }, side == "a" and m.a or m.b)
-                end
-            end
-        end
+    if w and not w.ended and not w.mirror and now - (w.askedAt or 0) >= Live.REASK then
+        w.askedAt = now
+        Comm.Send("WATCH", { id = w.id, v = 2 }, w.host)
     end
     local changed = false
     for id, g in pairs(Live.games) do
@@ -421,7 +394,7 @@ local function Tick()
 end
 Live.TICK = 0.25 -- quick, so watchers see each roll almost as soon as the players do
 Live.STATE_EVERY = 0.4 -- at most this often (a newer state replaces one still waiting)
-Live.REASK = 5 -- no table or run from a player we're watching after this long: ask again
+Live.REASK = 5 -- no table from a player we're watching after this long: ask again
 C_Timer.After(1, Tick)
 
 --- Games other people are playing, newest first.
@@ -430,7 +403,7 @@ function Live.List()
     for _, g in pairs(Live.games) do list[#list + 1] = g end
     -- my own game too (at the top), so I can see it's live for the guild
     local mine = ns.Games and ns.Games.Mine()
-    if mine and not mine.practice and not mine.asHouse and mine.state ~= "invite" and mine.kind ~= "slots" then
+    if mine and not mine.practice and not mine.asHouse and mine.state ~= "invite" then
         local ok, h = pcall(Live.Describe, mine)
         if ok then list[#list + 1] = { id = mine.id, h = h, own = true, first = math.huge } end
     end
@@ -447,7 +420,7 @@ function Live.Watch(id)
     if not g then return false end
     if Live.watching and Live.watching ~= id then Live.Unwatch() end
     Live.watching = id
-    g.runs, g.askedB, g.askedAt = nil, nil, GetTime()
+    g.askedAt = GetTime()
     Comm.Send("WATCH", { id = id, v = 2 }, g.host)
     if ns.UI then ns.UI.Refresh() end
     return true
@@ -460,7 +433,6 @@ function Live.Unwatch()
     local g = Live.games[id]
     if g and not g.ended then
         Comm.Send("UNWATCH", { id = id }, g.host)
-        if g.askedB then Comm.Send("UNWATCH", { id = id }, g.askedB) end
     end
     if ns.UI then ns.UI.Refresh() end
 end
@@ -494,9 +466,7 @@ end)
 Comm.On("WATCH", function(f, sender)
     local game = ns.Games.Get(f.id)
     if not game or not ns.Guild.Allowed(sender) then return end
-    -- a Kodo Crossing duel: both players stream their own run to the watcher
-    if game.kind == "kodo" and ns.Kodo then ns.Kodo.AddRunWatcher(game, sender) end
-    -- (my duel opponent only wants my run, not the spectator table)
+    -- (my opponent sees the game already, not as a spectator)
     if not game.live or ns.SameName(game.opponent, sender) then return end
     local kind = f.v and "table" or "text" -- 1.7.1+ watchers say v=2 and want the table
     if not game.live.watchers[sender] then
@@ -512,7 +482,6 @@ end)
 
 Comm.On("UNWATCH", function(f, sender)
     local game = ns.Games.Get(f.id)
-    if game and game.kind == "kodo" and ns.Kodo then ns.Kodo.RemoveRunWatcher(game, sender) end
     if game and game.live then
         game.live.watchers[sender] = nil
         if ns.UI then ns.UI.Refresh() end
@@ -530,10 +499,10 @@ end)
 -- Live table state (1.7.0+): besides the text lines above, the announcer sends watchers the
 -- game's actual state in a STATE message, and the watcher's addon rebuilds a stand-in game
 -- ("mirror") that the normal table view draws - the big deathroll number, the cards, the
--- reels, the coin - exactly as the players see it, from a neutral seat. Older watchers just
+-- coin - exactly as the players see it, from a neutral seat. Older watchers just
 -- ignore STATE and keep the text.
 ---------------------------------------------------------------------------
-local KIND_CODE = { deathroll = "dr", groupdr = "gd", blackjack = "bj", slots = "sl", coinflip = "cf", kodo = "kd" }
+local KIND_CODE = { deathroll = "dr", groupdr = "gd", blackjack = "bj", coinflip = "cf" }
 local CODE_KIND = {}
 for k, v in pairs(KIND_CODE) do CODE_KIND[v] = k end
 
@@ -600,22 +569,8 @@ function Live.State(game)
             f["h" .. s] = Csv(nums)
             f["x" .. s] = (hand.doubled and "d" or "") .. (hand.done and "s" or "")
         end
-    elseif game.kind == "slots" and game.mode == "duel" then
-        f.n = game.n
-        for _, s in ipairs({ "a", "b" }) do
-            local sp = game.spins[s]
-            f["c" .. s], f["t" .. s] = sp.count, sp.total
-            if sp.last then
-                f["r" .. s] = Csv(sp.last.reels or {})
-                f["m" .. s] = sp.last.mult
-                f["q" .. s] = sp.last.name
-            end
-        end
     elseif game.kind == "coinflip" then
         f.c, f.l, f.cs = game.call, game.landed, game.specStatus
-    elseif game.kind == "kodo" then
-        f.sa, f.sb = game.scores.a or 0, game.scores.b or 0
-        f.da, f.db = game.finishedRun.a and 1 or 0, game.finishedRun.b and 1 or 0
     end
     return f
 end
@@ -661,19 +616,6 @@ function Live.Mirror(entry, f)
         end
         -- the table view's top row is game.d (the "opponent"), the bottom row game.p
         m.d, m.p = m.hands.a.cards, m.hands.b.cards
-    elseif kind == "slots" then
-        m.title, m.mode, m.bet, m.n = "Slots duel", "duel", num(f.s) or 0, num(f.n) or 1
-        m.spins = m.spins or {}
-        for _, s in ipairs({ "a", "b" }) do
-            local reels = f["r" .. s] and Split(f["r" .. s]) or nil
-            m.spins[s] = { count = num(f["c" .. s]) or 0, total = num(f["t" .. s]) or 0,
-                last = reels and { reels = reels, mult = num(f["m" .. s]) or 0, name = f["q" .. s] or "" } or nil }
-        end
-        m.theirResult, m.result = m.spins.a.last, m.spins.b.last
-    elseif kind == "kodo" then
-        m.title, m.bet, m.state = "Kodo Crossing", num(f.s) or 0, "play"
-        m.scores = { a = num(f.sa) or 0, b = num(f.sb) or 0 }
-        m.finishedRun = { a = f.da == "1", b = f.db == "1" }
     elseif kind == "coinflip" then
         m.title, m.bet, m.call = "Coinflip", num(f.s) or 0, f.c
         m.landed = (f.l and f.l ~= "") and f.l or nil
@@ -691,10 +633,6 @@ Comm.On("STATE", function(f, sender)
     local ok, m = pcall(Live.Mirror, g, f)
     if ok and m then
         g.mirror = m
-        if m.kind == "kodo" and Live.watching == g.id and not g.askedB and m.b then
-            g.askedB = m.b
-            Comm.Send("WATCH", { id = g.id, v = 2 }, m.b)
-        end
         if ns.UI then ns.UI.Refresh() end
     end
 end)
@@ -702,52 +640,3 @@ end)
 function Live.SendState(game, target)
     Comm.Send("STATE", Live.State(game), target)
 end
-
--- A duel run, for the Live tab's replay: RUNS = where the run is now (when we start watching),
--- RUN = the hops since. p = "a" or "b", the player's side.
-Comm.On("RUNS", function(f, sender)
-    local g = Live.games[f.id or ""]
-    if not g or Live.watching ~= f.id or (f.p ~= "a" and f.p ~= "b") then return end
-    g.runs = g.runs or {}
-    g.runs[f.p] = { seed = tonumber(f.z), char = f.c, from = sender, next = (tonumber(f.n) or 0) + 1, snap = {
-        t = tonumber(f.t) or 0, x = tonumber(f.x) or 4, r = tonumber(f.r) or 0, cam = tonumber(f.m),
-        score = tonumber(f.sc) or 0, over = (f.o and f.o ~= "") and f.o or nil } }
-    if ns.UI and ns.UI.FollowRun then ns.UI.FollowRun(f.p, g.runs[f.p]) end
-end)
-
---- Takes a RUN batch for a run we follow: only hops we haven't had, in order. A gap means a
---- batch was lost: ask the player for the missing hops (at most every couple of seconds).
-function Live.TakeRun(run, f, sender, feed)
-    local first, total = tonumber(f.i) or 1, tonumber(f.n) or 0
-    local events = ns.Kodo.DecodeEvents(f.e)
-    if first > run.next then
-        local now = GetTime()
-        if now - (run.askedAt or 0) > 2 then
-            run.askedAt = now
-            Comm.Send("RUNREQ", { id = f.id, p = f.p, i = run.next }, sender)
-        end
-        return
-    end
-    local fresh = {}
-    for n, ev in ipairs(events) do
-        if first + n - 1 >= run.next then fresh[#fresh + 1] = ev end
-    end
-    run.next = math.max(run.next, first + #events)
-    feed(fresh, tonumber(f.k))
-    if total >= run.next then -- they've made more hops than we've got: ask for the rest
-        local now = GetTime()
-        if now - (run.askedAt or 0) > 2 then
-            run.askedAt = now
-            Comm.Send("RUNREQ", { id = f.id, p = f.p, i = run.next }, sender)
-        end
-    end
-end
-
-Comm.On("RUN", function(f, sender)
-    local g = Live.games[f.id or ""]
-    local run = g and g.runs and g.runs[f.p or ""]
-    if not run or Live.watching ~= f.id or not ns.SameName(run.from, sender) then return end
-    Live.TakeRun(run, f, sender, function(events, k)
-        if ns.UI and ns.UI.FeedRun then ns.UI.FeedRun(f.p, events, k) end
-    end)
-end)

@@ -7,11 +7,7 @@
 --
 -- Determinism: the lanes come from a seeded random generator, and everything that moves is a
 -- pure function of the run's clock (position = start + speed x time, stampedes on a seeded
--- timetable). So a Kodo Crossing duel (Games/Kodo.lua) gives both players exactly the same
--- world, and a spectator's addon can redraw a run from just the seed and the player's hops.
---
--- The game is an "engine" object, so several can exist: the player's own (Arcade tab) and
--- replay engines in the Live tab that follow someone else's run from their hops.
+-- timetable). Just for fun: no gold is involved (Kodo duels for gold were retired in 2.4.0).
 --
 -- Kept light: a fixed pool of row widgets per engine, re-used as the world scrolls; plain math
 -- for collisions; OnUpdate only while visible. Art: 16 px sprites in Media/arcade, NEAREST.
@@ -320,10 +316,8 @@ end
 local Engine = {}
 Engine.__index = Engine
 
---- opts.spectator: a replay engine (no input, no saving; driven by Feed).
-function Arcade.NewEngine(opts)
-    local e = setmetatable({ spectator = opts and opts.spectator or false }, Engine)
-    return e
+local function NewEngine()
+    return setmetatable({}, Engine)
 end
 
 function Engine:Die(how, score)
@@ -331,17 +325,12 @@ function Engine:Die(how, score)
     if g.state == "over" then return end
     g.state, g.death, g.diedAt = "over", how, GetTime()
     if score then g.score = score end
-    if self.spectator then self:Render() return end
     g.newBest = g.score > Arcade.Best()
     if g.newBest then
         ns.charDB.arcadeBest = g.score
         if ns.Board then ns.Board.Changed() end -- the guild's high-score list
     end
     ns.Sound(g.newBest and g.score > 0 and "win" or "bust")
-    if g.duel and ns.Kodo then
-        ns.Kodo.RunEvent(g.duel, { k = "d", t = g.time, c = how, s = g.score })
-        ns.Kodo.RunOver(g.duel, g.score)
-    end
     self:Render()
 end
 
@@ -352,10 +341,7 @@ function Engine:Land()
     g.x, g.r = h.toX, h.toR
     if g.r > g.score then
         g.score = g.r
-        if not self.spectator then
-            if g.score % CHIME_EVERY == 0 then ns.Sound("win") end
-            if g.duel and ns.Kodo then ns.Kodo.Progress(g.duel, g.score) end
-        end
+        if g.score % CHIME_EVERY == 0 then ns.Sound("win") end
     end
     local row = Row(g, g.r)
     if row.zone ~= g.zone then -- a new zone
@@ -365,13 +351,11 @@ function Engine:Land()
     if row.coin and row.coin == math.floor(g.x + 0.5) then
         row.coin, row.dirty = nil, true
         g.coins = g.coins + 1
-        if not self.spectator then
-            local db = Save()
-            db.arcadeCoins = db.arcadeCoins + 1
-            ns.Sound("coin")
-        end
+        local db = Save()
+        db.arcadeCoins = db.arcadeCoins + 1
+        ns.Sound("coin")
     end
-    if not self.spectator and row.kind == "water" and not Afloat(row, g.x) then return self:Die("water") end
+    if row.kind == "water" and not Afloat(row, g.x) then return self:Die("water") end
     if g.queued then
         local q = g.queued
         g.queued = nil
@@ -401,8 +385,6 @@ function Engine:Hop(dir)
     if row.kind == "grass" and row.blocks[toX] then return end -- a tree or rock in the way
     self:StartHop(toX, toR)
     if d[1] ~= 0 then g.facing = d[1] end
-    -- a duel run's hops go to spectators
-    if g.duel and ns.Kodo then ns.Kodo.RunEvent(g.duel, { k = "h", t = g.time, x = toX, r = toR }) end
 end
 
 function Engine:Step(dt)
@@ -431,21 +413,20 @@ function Engine:Step(dt)
     if not g.hop then px, pr = g.x, g.r end
 
     local row = Row(g, pr)
-    if not self.spectator and row.kind == "road" and MoverAt(row, px + 0.22, px + 0.78) then
+    if row.kind == "road" and MoverAt(row, px + 0.22, px + 0.78) then
         return self:Die(row.stampede and "stampede" or "road")
     end
     if row.kind == "water" and not g.hop and not row.pads then
-        if not self.spectator and not Afloat(row, g.x) then return self:Die("water") end
+        if not Afloat(row, g.x) then return self:Die("water") end
         g.x = g.x + row.dir * row.speed * dt -- ride the log
-        if not self.spectator and (g.x < -0.45 or g.x > COLS - 0.55) then return self:Die("swept") end
+        if g.x < -0.45 or g.x > COLS - 0.55 then return self:Die("swept") end
     end
 
     -- the view creeps forward once you've started, and keeps you in the lower half
     if g.started then g.cam = g.cam + (0.32 + math.min(0.55, g.score / 220)) * dt end
     local want = (g.hop and g.hop.toR or g.r) - 3
     if want > g.cam then g.cam = g.cam + (want - g.cam) * math.min(1, dt * 8) end
-    if not self.spectator and g.r < g.cam - 0.7 and not g.hop then return self:Die("slow") end
-    if self.spectator and g.cam > g.r + 0.5 then g.cam = g.r + 0.5 end
+    if g.r < g.cam - 0.7 and not g.hop then return self:Die("slow") end
 
     -- forget rows far behind
     for r in pairs(g.rows) do if r < lo - 2 then g.rows[r] = nil end end
@@ -517,20 +498,7 @@ end
 
 function Engine:OverlayText()
     local g = self.g
-    if self.spectator then
-        if g.state == "over" then
-            return ("|cffff4040%s|r\nScore |cffffffff%d|r"):format(DEATHS[g.death] or "Run over", g.score)
-        elseif not g.synced then
-            return "|cff888888Tuning in...|r"
-        end
-        return nil
-    end
-    local duel = g.duel
     if g.state == "ready" then
-        if duel then
-            return ("|cffffd100Kodo Crossing duel|r\nvs |cffffffff%s|r for %s\n\nYou get |cffffffffone run|r on the same lanes they get.\nThe higher score wins.\n\n|cffffd100Press an arrow key to start|r"):format(
-                ns.Short(duel.opponent), ns.Stake(duel.bet or 0))
-        end
         return "|cffffd100Kodo Crossing|r\n\nHop as far as you can. Dodge kodos and raptors,\nride logs and lily pads over rivers, grab coins,\nand don't dawdle - the herd is coming.\n\n|cffffffffArrow keys / WASD|r, |cffffffffP|r to pause\n\n|cffffd100Press an arrow key to start|r"
     elseif g.state == "paused" then
         return g.pauseWhy or "|cffffd100Paused|r\n\nPress an arrow key to carry on"
@@ -538,12 +506,6 @@ function Engine:OverlayText()
         local head = ("|cffff4040%s|r\n\nScore |cffffffff%d|r%s%s"):format(DEATHS[g.death] or "Ouch!", g.score,
             g.newBest and g.score > 0 and "  -  |cff20ff20new best!|r" or ("   (best " .. Arcade.Best() .. ")"),
             g.coins > 0 and ("\n+%d coin%s"):format(g.coins, g.coins == 1 and "" or "s") or "")
-        if duel then
-            if g.duelResult then
-                return head .. "\n\n" .. g.duelResult .. "\n\n|cffffd100Press Space for a practice run|r"
-            end
-            return head .. ("\n\n|cffbbbbbbWaiting for %s to finish their run...|r"):format(ns.Short(duel.opponent))
-        end
         return head .. "\n\n|cffffd100Press Space or click to play again|r"
     end
 end
@@ -667,28 +629,26 @@ function Engine:BuildCanvas(parent)
     local overlay = CreateFrame("Frame", nil, canvas, "BackdropTemplate")
     self.overlay = overlay
     overlay:SetPoint("CENTER")
-    overlay:SetSize(COLS * TILE - 30, self.spectator and 110 or 200)
+    overlay:SetSize(COLS * TILE - 30, 200)
     overlay:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     overlay:SetBackdropColor(0, 0, 0, 0.72)
     overlay:SetBackdropBorderColor(0.9, 0.72, 0.3, 1)
     overlay:SetFrameLevel(canvas:GetFrameLevel() + 20)
-    overlay.text = overlay:CreateFontString(nil, "OVERLAY", self.spectator and "GameFontNormalHuge" or "GameFontHighlight")
+    overlay.text = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     overlay.text:SetPoint("CENTER")
     overlay.text:SetWidth(COLS * TILE - 50)
     overlay.text:SetJustifyH("CENTER")
     return canvas
 end
 
---- A new run. opts.seed: the lanes (random if not given); opts.duel: the Kodo duel it's for;
---- opts.char: the character to show (spectators).
-function Engine:New(opts)
-    opts = opts or {}
-    local seed = opts.seed or math.random(1, 2147483646)
+--- A new run, on random lanes.
+function Engine:New()
+    local seed = math.random(1, 2147483646)
     local rand, int = NewRand(seed)
     self.g = { rows = {}, genTo = -3, runKind = "grass", runLeft = 0, x = math.floor(COLS / 2), r = 0, cam = -1,
         score = 0, time = 0, facing = 1, state = "ready", started = false, coins = 0, seed = seed,
-        rand = rand, int = int, duel = opts.duel, char = opts.char or PlayingAs() }
+        rand = rand, int = int, char = PlayingAs() }
     local g = self.g
     for r = -2, VIEW_ROWS + 2 do Row(g, r) end
     g.zone = Row(g, 0).zone
@@ -697,81 +657,9 @@ function Engine:New(opts)
 end
 
 ---------------------------------------------------------------------------
--- Replay (spectators): follow someone's run from its seed and hops
----------------------------------------------------------------------------
--- How far behind the player a replay runs, so a batch of hops always arrives in time.
-local REPLAY_DELAY = 1.5
-
---- Starts following a run: seed, character, and where they are now (s = snapshot).
-function Engine:Follow(seed, char, s)
-    self:New({ seed = seed, char = char })
-    local g = self.g
-    g.state, g.started, g.synced = "play", s.t > 0, true
-    g.time = s.t
-    g.x, g.r, g.cam, g.score = s.x, s.r, s.cam or (s.r - 3), s.score or 0
-    g.zone = Row(g, g.r).zone
-    g.queue, g.known = {}, s.t
-    g.clock = s.t -- where the player was when we last heard
-    if s.over then self:Die(s.over, s.score) end
-    self:Render()
-end
-
---- Hops ({k="h", t, x, r}) and the end ({k="d", t, c, s}) as they arrive.
-function Engine:Feed(events, knownTime)
-    local g = self.g
-    if not g or not g.queue then return end
-    for _, ev in ipairs(events) do
-        g.queue[#g.queue + 1] = ev
-        -- the run is over: nothing more is coming, so let the replay play right up to the end
-        if ev.k == "d" then g.known = math.max(g.known, ev.t + REPLAY_DELAY + 0.01) end
-    end
-    if knownTime and knownTime > g.known then g.known = knownTime end
-end
-
---- Advances a replay, never past what we've heard about (minus a small cushion).
-function Engine:Replay(dt)
-    local g = self.g
-    if not g or not g.queue or g.state ~= "play" then return end
-    local limit = g.known - REPLAY_DELAY
-    -- if we fall far behind (e.g. the window was closed), catch up at once
-    if limit - g.time > 4 then dt = limit - g.time - 1 end
-    local target = math.min(g.time + dt, limit)
-    local guard = 0 -- never let a replay hold up the game: at worst it pauses for a frame
-    while g.state == "play" do
-        local ev = g.queue[1]
-        local stop = ev and math.min(ev.t, target) or target
-        -- a long quiet stretch: everything that moves is a function of the clock, so jump
-        -- straight there instead of simulating every frame (just carry a log-rider along)
-        if stop - g.time > 1 and not g.hop then
-            local jump = stop - g.time - 0.5
-            local row = Row(g, g.r)
-            if row.kind == "water" and not row.pads and row.speed then
-                g.x = math.max(-0.4, math.min(COLS - 0.6, g.x + row.dir * row.speed * jump))
-            end
-            if g.started then g.cam = math.min(g.r + 0.5, g.cam + (0.32 + math.min(0.55, g.score / 220)) * jump) end
-            g.time = g.time + jump
-        end
-        while g.time < stop - 1e-6 do
-            local before = g.time
-            self:Step(math.min(0.05, stop - g.time))
-            guard = guard + 1
-            if g.time <= before or guard > 2000 then return end
-        end
-        if not ev or ev.t > target then break end
-        table.remove(g.queue, 1)
-        if ev.k == "h" then
-            self:StartHop(ev.x, ev.r)
-        elseif ev.k == "d" then
-            self:Die(ev.c, ev.s)
-        end
-    end
-end
-
----------------------------------------------------------------------------
 -- The player's own engine (Arcade tab)
 ---------------------------------------------------------------------------
-local main = Arcade.NewEngine()
-Arcade.main = main
+local main = NewEngine()
 
 local function KeyboardOn(on)
     if not main.canvas then return end
@@ -787,52 +675,13 @@ local function Pause(why)
 end
 
 function Arcade.Render() main:Render() end
-function Arcade.New(opts) main:New(opts) end
-
---- Starts this player's run in a Kodo Crossing duel (same seed on both sides).
-function Arcade.StartDuel(game)
-    main:New({ seed = game.seed, duel = game })
-    if ns.UI then
-        ns.UI.SetShown(true)
-        ns.UI.SelectTab("arcade")
-    end
-end
-
---- Ends the current duel run now (e.g. /gg cancel mid-run): the score so far counts.
-function Arcade.Forfeit(game)
-    local g = main.g
-    if g and g.duel == game then
-        if g.state == "ready" then g.state = "play" end
-        main:Die("quit")
-        return true
-    end
-    return false
-end
-
---- The duel's result, shown on the run's end screen.
-function Arcade.DuelOver(game, text)
-    local g = main.g
-    if g and g.duel == game then
-        g.duelResult = text
-        main:Render()
-    end
-end
-
---- Where my duel run is right now, for a spectator who just tuned in.
-function Arcade.Snapshot(game)
-    local g = main.g
-    if not g or g.duel ~= game then return nil end
-    return { t = g.time, x = g.hop and g.hop.toX or g.x, r = g.hop and g.hop.toR or g.r, cam = g.cam,
-        score = g.score, over = g.state == "over" and (g.death or "quit") or nil, char = g.char, seed = g.seed }
-end
 
 --- What a key or button does: arrows hop (and start or resume), P pauses, Space restarts.
 function Arcade.Input(action)
     if not main.g then main:New() end
     local g = main.g
     if g.state == "over" then
-        -- a duel run can't be re-run; once it's settled, Space starts a practice run
-        if (action == "start" or action == "click") and (not g.duel or g.duelResult) then
+        if action == "start" or action == "click" then
             main:New()
         end
         return
@@ -875,25 +724,8 @@ local function RefreshChooser()
     local g = main.g
     local busy = g and (g.state == "play" or g.state == "paused")
     if busy then panel.charBtn:Disable() else panel.charBtn:Enable() end
-    local duel = g and g.duel
-    if duel then
-        -- a duel: make it obvious who you're up against, and the score between you
-        local mine = ns.IsMe(duel.a) and "a" or "b"
-        local theirs = mine == "a" and "b" or "a"
-        local theirScore = duel.scores and duel.scores[theirs] or 0
-        local theyDone = duel.finishedRun and duel.finishedRun[theirs]
-        panel.score:SetText(("|cffff4040DUEL|r vs |cffffd100%s|r  -  %s      You |cffffffff%d|r : |cffffffff%d|r %s"):format(
-            ns.Short(duel.opponent), ns.Stake(duel.bet or 0), duel.scores and duel.scores[mine] or g.score,
-            theirScore, ns.Short(duel.opponent)))
-        -- and on the game screen itself, top right: who you're up against and how they're doing
-        panel.vs.name:SetText(("vs |cffffd100%s|r"):format(ns.Short(duel.opponent)))
-        panel.vs.score:SetText(("%d%s"):format(theirScore, theyDone and "  |cffbbbbbbfinal|r" or ""))
-        panel.vs:Show()
-    else
-        panel.score:SetText(("Score  |cffffffff%d|r      Best  |cffffd100%d|r      Coins  |cffffd100%d|r"):format(
-            g and g.score or 0, Arcade.Best(), db.arcadeCoins))
-        panel.vs:Hide()
-    end
+    panel.score:SetText(("Score  |cffffffff%d|r      Best  |cffffd100%d|r      Coins  |cffffd100%d|r"):format(
+        g and g.score or 0, Arcade.Best(), db.arcadeCoins))
 end
 
 function Arcade.NextChar()
@@ -928,22 +760,6 @@ function Arcade.Build(p)
     canvas:EnableMouse(true)
     canvas:SetScript("OnMouseDown", function() Arcade.Input("click") end)
     main.OnRender = RefreshChooser
-
-    -- in a duel: the opponent and their score, in a box on the game screen
-    local vs = CreateFrame("Frame", nil, canvas, "BackdropTemplate")
-    vs:SetPoint("TOPRIGHT", -6, -6)
-    vs:SetSize(150, 52)
-    vs:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    vs:SetBackdropColor(0, 0, 0, 0.7)
-    vs:SetBackdropBorderColor(1, 0.25, 0.25, 1)
-    vs:SetFrameLevel(canvas:GetFrameLevel() + 15)
-    vs.name = vs:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    vs.name:SetPoint("TOP", 0, -8)
-    vs.score = vs:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    vs.score:SetPoint("TOP", vs.name, "BOTTOM", 0, -2)
-    vs:Hide()
-    p.vs = vs
 
     -- buttons, for playing with the mouse
     local function Btn(label, action, x)
@@ -1020,6 +836,3 @@ end
 -- for the mock-client tests
 function Arcade._Step(dt) if main.g then main:Step(dt) main:Render() end end
 function Arcade._State() return main.g end
-function Arcade._Canvas() return main.canvas end
-function Arcade._Row(r) return main.g and Row(main.g, r) end
-function Arcade._PlaceMovers(row, t) PlaceMovers(row, t) end

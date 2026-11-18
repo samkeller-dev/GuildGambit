@@ -52,8 +52,7 @@ function Games.Remove(game)
 end
 
 local WON_TEXT = {
-    deathroll = "won a deathroll", blackjack = "won at blackjack", slots = "won at slots", coinflip = "won a coinflip",
-    kodo = "won at Kodo Crossing",
+    deathroll = "won a deathroll", blackjack = "won at blackjack", coinflip = "won a coinflip",
 }
 
 --- Records the result for this client and ends the game.
@@ -118,7 +117,6 @@ end
 function Games.Cancel(game, why, silent)
     if not game then return false end
     if game.kind == "groupdr" then return ns.GroupDeathroll.Leave(game, why) end
-    if game.kind == "kodo" then return ns.Kodo.Leave(game, why, silent) end
     if not silent and not game.practice then
         ns.Comm.Send("CANCEL", { id = game.id }, game.opponent)
     end
@@ -141,7 +139,7 @@ function ns.RematchText(tag)
     return ""
 end
 
-local REMATCH = { deathroll = true, coinflip = true, blackjack = true, groupdr = true } -- (Kodo duels: retired)
+local REMATCH = { deathroll = true, coinflip = true, blackjack = true, groupdr = true }
 
 --- The finished game a rematch would repeat, or nil.
 function Games.RematchOf()
@@ -168,6 +166,12 @@ end
 
 Games.invites = {} -- game id -> rematch tag ("r" / "d") from invites we received
 
+-- Kodo Crossing duels were retired in 2.4.0 (it's in the Arcade, just for fun): an older
+-- addon's duel invite gets a polite no instead of waiting for an answer
+ns.Comm.On("KD_INV", function(f, sender)
+    if f.id then ns.Comm.Send("KD_NO", { id = f.id, r = "Kodo Crossing duels were retired in GuildGambit 2.4.0 - it's played in the Arcade now" }, sender) end
+end)
+
 --- True if double or nothing makes sense (the run isn't at nothing).
 function Games.CanDouble()
     return Games.DoubleStake() ~= nil
@@ -187,7 +191,6 @@ function Games.Rematch(double)
             -- keep your side of the coin
             return ns.Coinflip.Challenge(target, money, g.practice and g.call or ns.Coinflip.SideOf(g, ns.Me()))
         elseif g.kind == "blackjack" then return ns.Blackjack.Deal(target, money)
-        elseif g.kind == "kodo" then return ns.Kodo.Challenge(target, money)
         elseif g.kind == "groupdr" then return ns.GroupDeathroll.Open(money, g.start)
         end
     end)

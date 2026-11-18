@@ -515,8 +515,6 @@ function WUI.Frame() return frame end
 function WUI.Pie() return pie end
 function WUI.Card() return card end
 function WUI.Slices() return slices, total end
-function WUI.Selected() return selected end
-
 ---------------------------------------------------------------------------
 -- The coin tab on the main window's right edge (like the spellbook's side tabs)
 ---------------------------------------------------------------------------

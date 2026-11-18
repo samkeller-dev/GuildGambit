@@ -2,9 +2,6 @@
 # The repository root is the addon folder, packaged as GuildGambit/.
 package-as: GuildGambit
 
-ignore:
-  - TESTING.md
-
 manual-changelog:
   filename: CHANGELOG.md
   markup-type: markdown
