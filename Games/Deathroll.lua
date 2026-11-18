@@ -495,6 +495,8 @@ GDR.MIN_PLAYERS = 2
 GDR.MAX_PLAYERS = 10
 GDR.LOBBY_TIMEOUT = 300 -- an unstarted room closes after 5 minutes
 GDR.TURN_TIMEOUT = 90   -- not rolling for this long knocks you out
+GDR.WARN_AT = 30        -- seconds left when the roller gets a loud last warning
+GDR.KICK_GRACE = 5      -- the judge waits a little past the countdown (the roller may have seen the turn late)
 GDR.START_RESEND = 3    -- the host repeats "started" a couple of times in case one is lost
 GDR.SYNC_WAIT = 4       -- seconds before trusting someone else's view of the game over ours
 GDR.STALE = 300         -- nothing happening for this long: our addon has lost the game, drop it
@@ -727,6 +729,38 @@ local function AfterMyRoll(game)
     if Games.Get(game.id) == game then SyncState(game) end
 end
 
+local function Clock(secs)
+    return ("%d:%02d"):format(math.floor(secs / 60), secs % 60)
+end
+
+--- The turn line, with the time left to roll.
+local function TurnStatus(game, roller, max)
+    local left = math.max(0, math.ceil((game.turnEnds or 0) - GetTime()))
+    local timeText = left <= GDR.WARN_AT and ("|cffff4040%s left|r"):format(Clock(left)) or (Clock(left) .. " left")
+    if ns.IsMe(roller) then return ("Your roll: 1-%d (%s)"):format(max, timeText), left end
+    return ("Waiting for %s to roll 1-%d (%s)"):format(ns.Short(roller), max, timeText), left
+end
+
+--- A big message in the middle of the screen (the raid warning spot), if the client has it.
+local function CenterAlert(text)
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        local color = (ChatTypeInfo and ChatTypeInfo.RAID_WARNING) or { r = 1, g = 0.3, b = 0.1 }
+        pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
+    end
+end
+GDR.CenterAlert = CenterAlert
+
+--- Counts the turn down once a second on the status line, until the turn changes.
+local function TickTurn(game, step, roller, max)
+    C_Timer.After(1, function()
+        if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
+        local left
+        game.status, left = TurnStatus(game, roller, max)
+        ns.UI.Refresh()
+        if left > 0 then TickTurn(game, step, roller, max) end
+    end)
+end
+
 function GroupTurn(game)
     game.n = game.n + 1
     local roller, max, step = game.alive[game.turnIdx], game.max, game.n
@@ -741,17 +775,32 @@ function GroupTurn(game)
             if ns.IsMe(roller) then AfterMyRoll(game) end
         end,
     })
+    game.turnEnds = GetTime() + GDR.TURN_TIMEOUT
+    game.status = TurnStatus(game, roller, max)
     if ns.IsMe(roller) then
         ns.Sound("turn")
-        game.status = ("Your roll: 1-%d"):format(max)
         ns.UI.SetRollPrompt(1, max, "Roll 1-" .. max)
+        -- said in chat and mid-screen too, so it's seen with the window closed
+        ns.Print("|cffffff00Your turn in the group deathroll: /roll %d|r - %d seconds or you're out.", max, GDR.TURN_TIMEOUT)
+        CenterAlert(("GuildGambit: your turn - /roll %d"):format(max))
     else
-        game.status = ("Waiting for %s to roll 1-%d"):format(ns.Short(roller), max)
         ns.UI.SetRollPrompt(nil)
     end
     ns.UI.Refresh()
+    TickTurn(game, step, roller, max)
+    -- last warning
+    C_Timer.After(GDR.TURN_TIMEOUT - GDR.WARN_AT, function()
+        if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
+        if ns.IsMe(roller) then
+            ns.Sound("hurry")
+            ns.Print("|cffff4040%d seconds left to /roll %d in the group deathroll, or you're out!|r", GDR.WARN_AT, max)
+            CenterAlert(("GuildGambit: %d seconds to /roll %d or you're out!"):format(GDR.WARN_AT, max))
+        else
+            ns.Log("%s has %d seconds left to roll.", ns.Short(roller), GDR.WARN_AT)
+        end
+    end)
     -- too slow: the first other player still in knocks them out and tells everyone
-    C_Timer.After(GDR.TURN_TIMEOUT, function()
+    C_Timer.After(GDR.TURN_TIMEOUT + GDR.KICK_GRACE, function()
         if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
         local judge
         for _, p in ipairs(game.alive) do

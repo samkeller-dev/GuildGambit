@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.2 - 2026-11-19
+
+- **Group deathroll: no more surprise time-outs.** When it's your turn you're now told in chat and in the middle of the screen (even with the window closed), the status line counts down the time left, and at 30 seconds left you get a loud warning. Everyone else sees the clock and a note when the roller is down to 30 seconds. The kick now comes a few seconds after the countdown ends, so a slow relay can't cut you off early.
+
 ## 2.4.1 - 2026-11-19
 
 - **Cleanup: everything unused is gone.** The retired Slots game (its code, table and symbol pictures), the Kodo Crossing duel code (retired in 2.4.0), unused coin pictures and a few unused functions have been removed - about 1,300 lines and 18 image files, so the download is smaller. Nothing you can use changes: Kodo Crossing is still in the Arcade, and `/gg kodo` opens it. A Kodo duel invite from an older version is still turned down politely.

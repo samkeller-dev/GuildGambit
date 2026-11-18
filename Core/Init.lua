@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Side bets and Kodo duels are gone (Kodo stays in the Arcade). Lottery sync fixed. Full changelog on CurseForge."
+ns.WHATS_NEW = "Group deathroll now warns you when it's your turn and counts down - no more surprise time-outs. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 
@@ -350,6 +350,7 @@ ns.SOUNDS = {
     card    = { "IG_ABILITY_PAGE_TURN" },                                  -- a card is dealt / you hit
     roll    = { "UI_BONUS_LOOT_ROLL_START", "U_CHAT_SCROLL_BUTTON" },      -- a deathroll / slot roll lands
     turn    = { "MAP_PING" },                                              -- your turn to roll
+    hurry   = { "RAID_WARNING", "MAP_PING" },                              -- your turn is nearly up
     invite  = { "IG_PLAYER_INVITE", "IG_MAINMENU_OPEN" },                  -- someone challenges you
     -- short stings only: no music fanfares (they were too loud over the game)
     win     = { "LOOT_WINDOW_COIN_SOUND", "IG_QUEST_LIST_COMPLETE" },      -- you won: coin jingle
