@@ -164,9 +164,11 @@ end
 -- only when Bob accepts do both ledgers record it (Bob's as "received"). The same goes for
 -- "I received" and for clearing everything with a player.
 --
--- Gold mailed with "Pay debts" is asked the same way, but that request is kept (across
--- reloads) and asked again whenever the player is seen online, until they answer. Until
--- then the amount counts as on its way, so it isn't paid twice.
+-- Gold mailed with "Pay debts" is different: it counts as soon as the gold has actually left
+-- our bags (a "sent" mail without the gold counts for nothing), and the other player's addon
+-- records it without a popup. That notice is kept (across reloads) and sent again whenever
+-- the player is seen online, until their addon has it. (An addon older than 2.4.3 still shows
+-- them the old confirm popup.)
 ---------------------------------------------------------------------------
 Ledger.CONFIRM_TIMEOUT = 60
 Ledger.REASK = 60       -- seconds between asking again about mailed gold
@@ -190,7 +192,8 @@ end
 function Ledger.InTransit(name)
     local sum = 0
     for _, r in pairs(Ledger.Pending()) do
-        if r.kind == "paid" and ns.SameName(r.to, name) then sum = sum + r.copper end
+        -- (gold already counted on our side isn't "on its way" any more)
+        if r.kind == "paid" and not r.recorded and ns.SameName(r.to, name) then sum = sum + r.copper end
     end
     return sum
 end
@@ -216,7 +219,7 @@ end
 
 local function Ask(id, r)
     r.asked = time()
-    ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, v = r.via, t = r.t }, r.to)
+    ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, v = r.via, t = r.t, a = r.recorded and 1 or nil }, r.to)
 end
 
 --- Asks name's addon to confirm a payment (kind "paid" / "received") or clearing all debts
@@ -271,6 +274,12 @@ ns.Comm.On("PAY_REQ", function(f, sender)
     local sentAt = tonumber(f.t)
     local function Stale() return mail and sentAt ~= nil and sentAt <= Ledger.ClearedAt(sender) end
     if Stale() then return no("cleared") end
+    -- Pay debts: the gold has left their bags and their addon has counted it - just record it
+    if kind == "paid" and mail and f.a then
+        Answered()[f.id] = time()
+        Apply("received", sender, copper, "mail")
+        return ns.Comm.Send("PAY_OK", { id = f.id }, sender)
+    end
     local text
     if kind == "paid" and mail then
         text = ("%s mailed you %s to pay what they owe. Confirm once it's in your mailbox?"):format(who, ns.Money(copper))
@@ -302,6 +311,7 @@ ns.Comm.On("PAY_OK", function(f, sender)
     local r = Ledger.requests[f.id] or Ledger.Pending()[f.id]
     if not r or not ns.SameName(r.to, sender) then return end
     Ledger.requests[f.id], Ledger.Pending()[f.id] = nil, nil
+    if r.recorded then return end -- (already counted on our side when the gold left)
     Apply(r.kind, r.to, r.copper, r.via)
 end)
 
@@ -309,6 +319,14 @@ ns.Comm.On("PAY_NO", function(f, sender)
     local r = Ledger.requests[f.id] or Ledger.Pending()[f.id]
     if not r or not ns.SameName(r.to, sender) then return end
     Ledger.requests[f.id], Ledger.Pending()[f.id] = nil, nil
+    if r.recorded then
+        if f.r ~= "cleared" then
+            ns.Log("|cffff8040%s's addon didn't take the %s you mailed (%s)|r - it still counts on your side, as the gold left your bags. Check with them that the mail arrived.",
+                ns.Short(sender), ns.Money(r.copper), f.r or "no reason")
+        end
+        if ns.UI then ns.UI.Refresh() end
+        return
+    end
     if f.r == "cleared" then
         ns.Log("The %s you mailed %s no longer counts - you cleared everything with them after sending it.",
             ns.Money(r.copper), ns.Short(sender))
@@ -331,6 +349,7 @@ ns.MailPay = Mail
 Mail.open = false
 Mail.STEP_TIMEOUT = 8
 Mail.NEXT_DELAY = 0.5
+Mail.MONEY_WAIT = 5 -- seconds after "mail sent" for the gold to leave our bags
 Mail.SUBJECT = "GuildGambit: paying what I owe"
 
 --- { { name, amount } } still to pay, biggest first.
@@ -344,7 +363,14 @@ function Mail.Owed()
     return out
 end
 
-function Mail.Busy() return Mail.sending ~= nil end
+function Mail.Busy() return Mail.sending ~= nil or Mail.confirming ~= nil end
+
+--- True once the mail's gold has left our bags.
+local function GoldLeft(job)
+    local now = tonumber(GetMoney and GetMoney())
+    if not job.before or not now then return true end -- (can't tell: trust the game's "sent")
+    return job.before - now >= job.amount
+end
 
 local function Call(fn, ...)
     if type(fn) ~= "function" then return nil end
@@ -376,11 +402,11 @@ function Mail.SendNext()
     if Call(SetSendMailMoney, d.amount) == false then
         return Stop(("Couldn't put %s on the mail to %s - stopped."):format(ns.Money(d.amount), ns.Short(d.name)))
     end
-    local token = { to = d.name, amount = d.amount }
+    local token = { to = d.name, amount = d.amount, before = tonumber(Call(GetMoney)) }
     Mail.sending = token
     if ns.UI then ns.UI.Refresh() end
     local ok, err = pcall(SendMail, d.name, Mail.SUBJECT,
-        ("Paying the %s I owe you on GuildGambit. Confirm it in the popup when it arrives."):format(ns.Money(d.amount)))
+        ("Paying the %s I owe you on GuildGambit - both our ledgers count it once it's sent."):format(ns.Money(d.amount)))
     if not ok then return Stop("Couldn't send the mail: " .. tostring(err)) end
     C_Timer.After(Mail.STEP_TIMEOUT, function()
         if Mail.sending == token then
@@ -395,7 +421,7 @@ end
 --- The Pay debts button.
 function Mail.PayAll()
     if not Mail.open then ns.Print("Open a mailbox first.") return false end
-    if Mail.sending then return false end
+    if Mail.Busy() then return false end
     local queue = Mail.Owed()
     if #queue == 0 then ns.Print("You don't owe anyone anything.") return false end
     Mail.queue = queue
@@ -410,13 +436,42 @@ function Mail.MAIL_CLOSED()
     Mail.sending, Mail.queue = nil, nil
     if ns.UI then ns.UI.Refresh() end
 end
+--- The gold has left our bags: count it now, tell their addon, and mail the next one.
+local function Paid(s)
+    Ledger.Payment(s.to, s.amount, "paid", "mail", false)
+    local r = { to = s.to, copper = s.amount, kind = "paid", via = "mail", t = Now(), recorded = true }
+    local id = ns.NewId()
+    Ledger.Pending()[id] = r
+    Ask(id, r)
+    if Mail.queue then C_Timer.After(Mail.NEXT_DELAY, Mail.SendNext) end
+end
+
+--- MAIL_SEND_SUCCESS. A "sent" mail only pays the debt once its gold has left our bags.
 function Mail.MAIL_SEND_SUCCESS()
     if ns.Lottery and ns.Lottery.OnMailSent() then return end -- a lottery ticket or payout
     local s = Mail.sending
     if not s then return end
     Mail.sending = nil
-    Ledger.Request("paid", s.to, s.amount, "mail")
-    C_Timer.After(Mail.NEXT_DELAY, Mail.SendNext)
+    if GoldLeft(s) then return Paid(s) end
+    Mail.confirming = s
+    C_Timer.After(Mail.MONEY_WAIT, function()
+        if Mail.confirming ~= s then return end
+        Mail.confirming = nil
+        Stop()
+        ns.Log("|cffff8040The mail to %s was sent, but the %s didn't leave your bags|r - nothing was paid or recorded. Check your gold and try again.",
+            ns.Short(s.to), ns.Money(s.amount))
+    end)
+    if ns.UI then ns.UI.Refresh() end
+end
+
+--- PLAYER_MONEY: the gold for a sent debt mail has left our bags.
+function Mail.OnMoney()
+    local s = Mail.confirming
+    if s and GoldLeft(s) then
+        Mail.confirming = nil
+        Paid(s)
+        if ns.UI then ns.UI.Refresh() end
+    end
 end
 function Mail.MAIL_FAILED()
     if ns.Lottery and ns.Lottery.OnMailFailed() then return end

@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.3 - 2026-11-19
+
+- **Pay debts only counts gold that actually leaves your bags.** Before, a mail the game called "sent" counted as paid even if no gold went with it, and the receiver's confirm popup made it look settled. Now each Pay debts mail counts only once its gold has gone. Then it's recorded on both ledgers straight away, with no popup for the receiver (they need 2.4.3 or newer; older versions still see the popup). If the gold doesn't leave within a few seconds, nothing is recorded and you're told.
+
 ## 2.4.2 - 2026-11-19
 
 - **Group deathroll: no more surprise time-outs.** When it's your turn you're now told in chat and in the middle of the screen (even with the window closed), the status line counts down the time left, and at 30 seconds left you get a loud warning. Everyone else sees the clock and a note when the roller is down to 30 seconds. The kick now comes a few seconds after the countdown ends, so a slow relay can't cut you off early.

@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Group deathroll now warns you when it's your turn and counts down - no more surprise time-outs. Full changelog on CurseForge."
+ns.WHATS_NEW = "Pay debts now counts only gold that actually leaves your bags, and both ledgers update by themselves - no popup. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 
