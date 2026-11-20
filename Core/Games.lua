@@ -36,8 +36,19 @@ function Games.IsParticipant(name)
     return false
 end
 
+--- In a game - or just logged in / reloaded and still asking whether we were in one (see
+--- "Catching up after a reload" below), so no new game can start on top of one we're about to
+--- get back.
 function Games.Busy()
-    return Games.Mine() ~= nil
+    return Games.Mine() ~= nil or Games.recovering == true
+end
+
+--- Why we can't start a game right now.
+function Games.BusyText()
+    if not Games.Mine() and Games.recovering then
+        return "Checking whether you were in a game before the reload - try again in a few seconds."
+    end
+    return "Finish your current game first (or |cffffff00/gg cancel|r)."
 end
 
 function Games.Remove(game)
@@ -73,12 +84,18 @@ function Games.Finish(game, net, summary, outcome)
     else
         game.runNet = net
     end
+    local wager = game.wagered or game.bet or game.stake or 0
     ns.Ledger.Record({
         id = game.id, game = game.kind, opponent = game.opponent, net = net, result = outcome,
-        wager = game.wagered or game.bet or game.stake or 0,
+        wager = wager,
         drop = game.drop, -- deathroll: the range I rolled a 1 from
         verified = game.verified ~= false, practice = practice,
     })
+    -- kept a while, so an opponent who reloaded before the end still gets the same result
+    if not practice and not game.asHouse then
+        Games.Remember(game.id, { game.opponent }, { { "GG_DONE", { id = game.id, g = game.kind, net = net,
+            o = outcome, w = wager, v = game.verified ~= false and 1 or 0 } } })
+    end
     local tag = practice and " |cff888888(practice)|r" or
         (game.verified == false and " |cffff8800(unverified rolls)|r" or "")
     local result = ns.ResultText(net, outcome)
@@ -204,3 +221,136 @@ end
 function Games.NoteRoll(game, verified)
     if not verified then game.verified = false end
 end
+
+---------------------------------------------------------------------------
+-- Catching up after a reload. A /reload (or a disconnect) wipes the games this addon was
+-- tracking, while the other players' addons carry on. So after every login we ask the guild
+-- "is anyone in a game with me?" (GG_WHERE, a few times, as messages right after a loading
+-- screen are often lost). Every addon still in a game with us answers:
+--   * a game that can carry on (deathroll, group deathroll, a group lobby): its state (GG_HERE)
+--     and we pick the game back up, with the time left on the turn;
+--   * a game that can't (coinflip, blackjack - our own hidden card is gone): they cancel their
+--     side, with no result for either, and say so (GG_DONE with x=1);
+--   * a game that ended meanwhile (kept for RECENT_KEEP): its result (GG_DONE), so our ledger
+--     shows exactly what theirs does. A result already on the ledger is never added twice.
+-- Answers are only taken while we're asking (or about a game we already have), so nobody can
+-- put a made-up result on someone's ledger at any other time. Older addons don't answer: then
+-- the normal turn updates and end-of-game messages still catch us up once a game we got back
+-- moves on.
+---------------------------------------------------------------------------
+Games.RECOVER_ASKS = { 5, 10, 15 } -- seconds after login
+Games.RECOVER_WINDOW = 20          -- answers are taken (and new games wait) this long after login
+Games.RECENT_KEEP = 600            -- finished games are kept this long to tell a reloaded player
+Games.recovering = false
+Games.recent = {}                  -- id -> { with = { names }, at, messages = { { type, fields } } }
+Games.recovery = {}                -- kind -> { answer = fn(game, asker), here = fn(f, sender) }
+
+--- Keeps a finished game's result for players who weren't there to see the end.
+function Games.Remember(id, with, messages)
+    if not id then return end
+    Games.recent[id] = { with = with, at = GetTime(), messages = messages }
+end
+
+local function Involves(list, name)
+    for _, n in ipairs(list or {}) do
+        if ns.SameName(n, name) then return true end
+    end
+    return false
+end
+Games.Involves = Involves
+
+--- Called once at login: ask the guild whether we were in a game.
+function Games.StartRecovery()
+    -- (no IsInGuild check: right after a fresh login it can still say no; a guild message
+    -- simply isn't sent when we aren't in one)
+    Games.recovering = true
+    for _, t in ipairs(Games.RECOVER_ASKS) do
+        C_Timer.After(t, function()
+            if Games.recovering then ns.Comm.Send("GG_WHERE", {}, nil) end
+        end)
+    end
+    C_Timer.After(Games.RECOVER_WINDOW, function()
+        Games.recovering = false
+        if ns.UI then ns.UI.Refresh() end
+    end)
+end
+
+-- someone just logged in or reloaded: tell them about every game they were in with us
+ns.Comm.On("GG_WHERE", function(f, sender)
+    if not ns.Guild.Allowed(sender) then return end
+    local now = GetTime()
+    for id, r in pairs(Games.recent) do
+        if now - r.at > Games.RECENT_KEEP then
+            Games.recent[id] = nil
+        elseif Involves(r.with, sender) then
+            for _, m in ipairs(r.messages) do ns.Comm.Send(m[1], m[2], sender) end
+        end
+    end
+    local list = {}
+    for _, g in pairs(Games.active) do list[#list + 1] = g end
+    for _, g in ipairs(list) do
+        local rec = Games.recovery[g.kind]
+        if rec and rec.answer and not g.practice and Games.Get(g.id) == g then
+            local ok, err = pcall(rec.answer, g, sender)
+            if not ok then ns.Debug("recovery answer failed: %s", tostring(err)) end
+        end
+    end
+end)
+
+--- A 1v1 game that can't be picked up again: cancel our side (no result) and tell them.
+function Games.CancelForReload(game, asker)
+    if game.state == "invite" or not ns.SameName(game.opponent or "", asker) then return end
+    ns.Comm.Send("GG_DONE", { id = game.id, g = game.kind, x = 1 }, asker)
+    Games.Cancel(game, ns.Short(asker) .. " reloaded - no result for either of you", true)
+end
+
+local ONE_V_ONE = { deathroll = "Deathroll", coinflip = "Coinflip", blackjack = "Blackjack" }
+
+-- a game that ended (or was cancelled) while we were away
+ns.Comm.On("GG_DONE", function(f, sender)
+    if not f.id then return end
+    local kind = f.g
+    local rec = Games.recovery[kind]
+    if rec and rec.done then return rec.done(f, sender) end
+    if not ONE_V_ONE[kind] then return end
+    local game = Games.Get(f.id)
+    local ours = game and game.kind == kind and ns.SameName(game.opponent or "", sender)
+    if not (Games.recovering or ours) then return end
+    if game and not ours then return end
+    if f.x then
+        if game then Games.Remove(game) end
+        ns.Log("Your %s with %s was cancelled because of the reload - nothing recorded.", ONE_V_ONE[kind]:lower(),
+            ns.Short(sender))
+        return
+    end
+    local net, outcome, wager = tonumber(f.net), tonumber(f.o), tonumber(f.w) or 0
+    if not net or not outcome or math.abs(net) > 2 * ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD then return end
+    if game then Games.Remove(game) end
+    -- their result, from our side
+    net, outcome = -net, -outcome
+    local _, new = ns.Ledger.Record({ id = f.id, game = kind, opponent = sender, net = net, result = outcome,
+        wager = wager, verified = f.v ~= "0" })
+    if not new then return end
+    ns.Log("%s vs %s ended while you were reloading: %s", ONE_V_ONE[kind], ns.Short(sender), ns.ResultText(net, outcome))
+    if outcome > 0 then
+        -- the winner's addon posts it, and that's us - nobody has yet
+        local what = ({ deathroll = "won a deathroll", coinflip = "won a coinflip", blackjack = "won at blackjack" })[kind]
+        ns.GuildAnnounce(("[GuildGambit] %s %s against %s %s!"):format(ns.Short(ns.Me()), what,
+            ns.Short(sender), net > 0 and ("for " .. ns.Money(net)) or "just for fun"))
+    end
+    if ns.Board then ns.Board.Changed() end
+end)
+
+ns.Comm.On("GG_HERE", function(f, sender)
+    local rec = f.id and Games.recovery[f.g or ""]
+    if not rec or not rec.here then return end
+    if not (Games.recovering or Games.Get(f.id)) then return end
+    if not ns.Guild.Allowed(sender) then return end
+    rec.here(f, sender)
+end)
+
+-- coinflips and blackjack can't be picked up again
+Games.recovery.coinflip = { answer = Games.CancelForReload }
+Games.recovery.blackjack = { answer = function(game, asker)
+    if game.mode == "duel" then Games.CancelForReload(game, asker) end
+end }

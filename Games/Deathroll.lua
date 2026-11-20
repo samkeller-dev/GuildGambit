@@ -89,7 +89,7 @@ end
 --- Challenge target (nil or "practice" for a solo game against a bot).
 function DR.Challenge(target, stakeGold, start)
     if Games.Busy() then
-        ns.Print("Finish your current game first (or |cffffff00/gg cancel|r).")
+        ns.Print(Games.BusyText())
         return nil
     end
     local stake = ns.GoldToCopper(stakeGold)
@@ -188,6 +188,63 @@ Comm.On("DR_NO", function(f, sender)
         Games.Remove(game)
     end
 end)
+
+---------------------------------------------------------------------------
+-- After a reload (see Games.lua): the opponent's addon tells ours where the game stands.
+---------------------------------------------------------------------------
+local function LastRollFields(game, fields, nameOf)
+    local lr = game.lastRoll
+    if lr then fields.lv, fields.lm, fields.lw = lr.value, lr.max, nameOf(lr.who) end
+    return fields
+end
+
+--- Picks the game up at step k (k is the step whose roll is awaited).
+local function ResumeAt(game, k, turn, max)
+    Rolls.UnwatchPrefix(game.id .. ":")
+    game.n, game.turn, game.max = k - 1, turn, max
+    NextTurn(game)
+end
+
+Games.recovery.deathroll = {
+    answer = function(game, asker)
+        if game.state ~= "play" or not ns.SameName(game.opponent, asker) then return end
+        Comm.Send("GG_HERE", LastRollFields(game, {
+            id = game.id, g = "deathroll", A = ns.Full(game.a), B = ns.Full(game.b), s = game.stake,
+            n = game.start, k = game.n, tu = game.turn == game.a and "a" or "b", m = game.max,
+            v = game.verified ~= false and 1 or 0,
+        }, function(who) return who == game.a and "a" or "b" end), asker)
+        ns.Log("%s reloaded mid-deathroll - their addon is catching up.", ns.Short(asker))
+    end,
+    here = function(f, sender)
+        local stake, start, k, m = tonumber(f.s), tonumber(f.n), tonumber(f.k), tonumber(f.m)
+        if not (stake and start and k and m) or stake < 0 or k < 1 or m < 2 or m > start or start > DR.MAX_START then return end
+        if f.tu ~= "a" and f.tu ~= "b" then return end
+        -- one of the two must be us and the other the player telling us
+        local iAmA = ns.IsMe(f.A or "")
+        if iAmA == ns.IsMe(f.B or "") then return end
+        if not ns.SameName(iAmA and f.B or f.A, sender) then return end
+        local game = Games.Get(f.id)
+        if game then
+            -- a second answer (we asked more than once): only a later step moves us on
+            if game.kind == "deathroll" and game.state == "play" and ns.SameName(game.opponent, sender) and k > game.n then
+                ResumeAt(game, k, f.tu == "a" and game.a or game.b, m)
+            end
+            return
+        end
+        if Games.Mine() then return end
+        local a = iAmA and ns.Me() or sender
+        local b = iAmA and sender or ns.Me()
+        game = NewGame({ id = f.id, a = a, b = b, opponent = sender, stake = stake, start = start })
+        game.state, game.verified = "play", f.v ~= "0"
+        if k > 1 then game.history[1] = "(before your reload)" end
+        local lv, lm = tonumber(f.lv), tonumber(f.lm)
+        if lv and lm and (f.lw == "a" or f.lw == "b") then
+            game.lastRoll = { who = f.lw == "a" and a or b, value = lv, max = lm, seq = #game.history }
+        end
+        ns.Log("Back in your deathroll vs %s after the reload - caught up from their addon.", ns.Short(sender))
+        ResumeAt(game, k, f.tu == "a" and a or b, m)
+    end,
+}
 
 ---------------------------------------------------------------------------
 -- Coinflip (kept in this file so it loads without changing the addon's file list).
@@ -350,7 +407,7 @@ end
 --- Coinflip against a guildie, or practice. call: "A"/"H" or a word (default: your faction).
 function CF.Challenge(target, betGold, call)
     if Games.Busy() then
-        ns.Print("Finish your current game first (or |cffffff00/gg cancel|r).")
+        ns.Print(Games.BusyText())
         return nil
     end
     local bet = ns.GoldToCopper(betGold)
@@ -497,7 +554,8 @@ GDR.LOBBY_TIMEOUT = 300 -- an unstarted room closes after 5 minutes
 GDR.TURN_TIMEOUT = 90   -- not rolling for this long knocks you out
 GDR.WARN_AT = 30        -- seconds left when the roller gets a loud last warning
 GDR.KICK_GRACE = 5      -- the judge waits a little past the countdown (the roller may have seen the turn late)
-GDR.START_RESEND = 3    -- the host repeats "started" a couple of times in case one is lost
+GDR.JUDGE_BACKUP = 10  -- if the judge's addon is gone, the next player kicks this much later
+GDR.START_RESEND = 3   -- the host repeats "started" a couple of times in case one is lost
 GDR.SYNC_WAIT = 4       -- seconds before trusting someone else's view of the game over ours
 GDR.STALE = 300         -- nothing happening for this long: our addon has lost the game, drop it
 
@@ -577,7 +635,7 @@ end
 --- Opens a room for the guild. bet may be 0 (just for fun).
 function GDR.Open(betText, start)
     if Games.Busy() then
-        ns.Print("Finish your current game first (or |cffffff00/gg cancel|r).")
+        ns.Print(Games.BusyText())
         return nil
     end
     if not (IsInGuild and IsInGuild()) then ns.Print("Group deathrolls are for your guild - you're not in one.") return nil end
@@ -657,6 +715,12 @@ local function Finish(game, winner)
             result = -1, wager = game.bet, verified = verified, drop = game.drop })
         net, outcome = -game.bet, -1
     end
+    -- kept a while, for a player whose addon reloaded before the end
+    Games.Remember(game.id, game.players, {
+        { "GG_PLY", { id = game.id, p = Names(game.players) } },
+        { "GG_DONE", { id = game.id, g = "groupdr", w = IndexOf(game.players, winner), s = game.bet, n = game.start,
+            v = verified and 1 or 0 } },
+    })
     game.finished, game.net, game.outcome = true, net, outcome
     game.summary = ("%s %s the last one standing out of %d"):format(iWon and "you" or ns.Short(winner),
         iWon and "are" or "is", #game.players)
@@ -753,7 +817,10 @@ local function TickTurn(game, step, roller, max)
     end)
 end
 
-function GroupTurn(game)
+--- The next turn. left: seconds the roller has (default the full TURN_TIMEOUT; less when we
+--- pick a game back up after a reload).
+function GroupTurn(game, left)
+    left = math.max(0, math.min(GDR.TURN_TIMEOUT, left or GDR.TURN_TIMEOUT))
     game.n = game.n + 1
     local roller, max, step = game.alive[game.turnIdx], game.max, game.n
     game.turn = roller
@@ -767,40 +834,47 @@ function GroupTurn(game)
             if ns.IsMe(roller) then AfterMyRoll(game) end
         end,
     })
-    game.turnEnds = GetTime() + GDR.TURN_TIMEOUT
+    game.turnEnds = GetTime() + left
     game.status = TurnStatus(game, roller, max)
     if ns.IsMe(roller) then
         ns.Sound("turn")
         ns.UI.SetRollPrompt(1, max, "Roll 1-" .. max)
         -- said in chat too, so it's seen with the window closed
-        ns.Print("|cffffff00Your turn in the group deathroll: /roll %d|r - %d seconds or you're out.", max, GDR.TURN_TIMEOUT)
+        ns.Print("|cffffff00Your turn in the group deathroll: /roll %d|r - %d seconds or you're out.", max, left)
     else
         ns.UI.SetRollPrompt(nil)
     end
     ns.UI.Refresh()
     TickTurn(game, step, roller, max)
     -- last warning
-    C_Timer.After(GDR.TURN_TIMEOUT - GDR.WARN_AT, function()
-        if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
-        if ns.IsMe(roller) then
-            ns.Sound("hurry")
-            ns.Print("|cffff4040%d seconds left to /roll %d in the group deathroll, or you're out!|r", GDR.WARN_AT, max)
-        else
-            ns.Log("%s has %d seconds left to roll.", ns.Short(roller), GDR.WARN_AT)
+    if left > GDR.WARN_AT then
+        C_Timer.After(left - GDR.WARN_AT, function()
+            if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
+            if ns.IsMe(roller) then
+                ns.Sound("hurry")
+                ns.Print("|cffff4040%d seconds left to /roll %d in the group deathroll, or you're out!|r", GDR.WARN_AT, max)
+            else
+                ns.Log("%s has %d seconds left to roll.", ns.Short(roller), GDR.WARN_AT)
+            end
+        end)
+    end
+    -- too slow: the first other player still in knocks them out and tells everyone. If that
+    -- player's addon is gone (reloading, disconnected), the next one does it a little later,
+    -- and so on - a kick that already happened moves the step on, so only one ever counts.
+    local judges = {}
+    for _, p in ipairs(game.alive) do
+        if not ns.SameName(p, roller) then judges[#judges + 1] = p end
+    end
+    for j, judge in ipairs(judges) do
+        if ns.IsMe(judge) then
+            C_Timer.After(left + GDR.KICK_GRACE + (j - 1) * GDR.JUDGE_BACKUP, function()
+                if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
+                SendAll(game, "GDR_KICK", { id = game.id, w = ns.Full(roller), k = step })
+                KnockOut(game, roller, "took too long to roll", false)
+                if Games.Get(game.id) == game then SyncState(game) end
+            end)
         end
-    end)
-    -- too slow: the first other player still in knocks them out and tells everyone
-    C_Timer.After(GDR.TURN_TIMEOUT + GDR.KICK_GRACE, function()
-        if Games.Get(game.id) ~= game or game.n ~= step or game.state ~= "play" then return end
-        local judge
-        for _, p in ipairs(game.alive) do
-            if not ns.SameName(p, roller) then judge = p break end
-        end
-        if not (judge and ns.IsMe(judge)) then return end
-        SendAll(game, "GDR_KICK", { id = game.id, w = ns.Full(roller), k = step })
-        KnockOut(game, roller, "took too long to roll", false)
-        if Games.Get(game.id) == game then SyncState(game) end
-    end)
+    end
     -- nothing at all for minutes (everyone's addon gone quiet, or ours lost track): let go,
     -- so the addon isn't stuck in a game that's over
     C_Timer.After(GDR.STALE, function()
@@ -1001,3 +1075,176 @@ Comm.On("GDR_END", function(f, sender)
     game.alive = { winner }
     Finish(game, winner)
 end)
+
+---------------------------------------------------------------------------
+-- Group deathroll after a reload (see Games.lua). Every player still in the room answers with
+-- the player list (GG_PLY, sent first) and where the game stands (GG_HERE), or with the
+-- result if it ended meanwhile (GG_DONE). Several answers can disagree if one addon missed a
+-- roll: the latest step wins, and at the same step the host's - the same rule on every client,
+-- whatever order the answers arrive in. The normal turn updates fix anything left over.
+---------------------------------------------------------------------------
+local recoverPlayers = {} -- id -> { from = name, list = { names } } (the list a GG_HERE/GG_DONE refers to)
+
+Comm.On("GG_PLY", function(f, sender)
+    if not f.id or not (Games.recovering or Games.Get(f.id)) then return end
+    local list = ParseNames(f.p)
+    if #list < GDR.MIN_PLAYERS or #list > GDR.MAX_PLAYERS then return end
+    recoverPlayers[f.id] = { from = sender, list = list }
+end)
+
+--- The player list the sender just sent for this room, if it has us and them in it.
+local function SentPlayers(f, sender)
+    local p = recoverPlayers[f.id]
+    if not p or not ns.SameName(p.from, sender) then return nil end
+    local list = {}
+    for i, n in ipairs(p.list) do list[i] = ns.IsMe(n) and ns.Me() or n end
+    if not IndexOf(list, ns.Me()) or not IndexOf(list, sender) then return nil end
+    return list
+end
+
+local function ArmLobbyTimeout(game)
+    if IsHost(game) then
+        C_Timer.After(GDR.LOBBY_TIMEOUT, function()
+            if Games.Get(game.id) == game and game.state == "lobby" then Games.Cancel(game, "nobody started it") end
+        end)
+    else
+        C_Timer.After(GDR.LOBBY_TIMEOUT + 30, function()
+            if Games.Get(game.id) == game and game.state == "lobby" then
+                Games.Remove(game)
+                ns.Log("%s's group deathroll never started.", ns.Short(game.host))
+            end
+        end)
+    end
+end
+
+--- Rebuilds a running game at step k from an answer: alive = names, i = whose turn, m = range.
+local function ResumeGroup(game, k, alive, i, m, left)
+    Rolls.UnwatchPrefix(game.id .. ":")
+    game.state = "play"
+    game.alive, game.turnIdx, game.max, game.n = alive, i, m, k - 1
+    game.out = {}
+    for _, n in ipairs(game.players) do
+        if not IndexOf(alive, n) then game.out[#game.out + 1] = n end
+    end
+    game.iAmOut = not IndexOf(alive, ns.Me()) or nil
+    if game.iAmOut then ns.UI.SetRollPrompt(nil) end
+    GroupTurn(game, left)
+end
+
+GDR.recovery = {
+    answer = function(game, asker)
+        if not IndexOf(game.players, asker) then return end
+        if game.state == "lobby" then
+            -- the host's list is the real one: only the host answers a player, and every player
+            -- answers the host (who merges what they say)
+            local askerIsHost = ns.SameName(game.host, asker)
+            if not (IsHost(game) or askerIsHost) then return end
+            Comm.Send("GG_PLY", { id = game.id, p = Names(game.players) }, asker)
+            Comm.Send("GG_HERE", { id = game.id, g = "groupdr", st = "lobby", s = game.bet, n = game.start }, asker)
+            return
+        end
+        if game.state ~= "play" then return end
+        local alive = {}
+        for _, n in ipairs(game.alive) do alive[#alive + 1] = IndexOf(game.players, n) end
+        local fields = {
+            id = game.id, g = "groupdr", st = "play", s = game.bet, n = game.start, k = game.n,
+            i = game.turnIdx, m = game.max, a = table.concat(alive, "."),
+            t = math.max(0, math.floor((game.turnEnds or GetTime()) - GetTime())),
+            v = game.verified ~= false and 1 or 0,
+        }
+        local lr = game.lastRoll
+        if lr then fields.lv, fields.lm, fields.lw = lr.value, lr.max, IndexOf(game.players, lr.who) end
+        Comm.Send("GG_PLY", { id = game.id, p = Names(game.players) }, asker)
+        Comm.Send("GG_HERE", fields, asker)
+    end,
+
+    here = function(f, sender)
+        local list = SentPlayers(f, sender)
+        local bet, start = tonumber(f.s), tonumber(f.n)
+        if not list or not bet or bet < 0 or not start or start < 2 or start > DR.MAX_START then return end
+        local game = Games.Get(f.id)
+        if game and game.kind ~= "groupdr" then return end
+        if not game and Games.Mine() then return end -- (in another game by now)
+
+        if f.st == "lobby" then
+            if not game then
+                game = NewRoom({ id = f.id, host = list[1], bet = bet, start = start, players = list })
+                ns.Log("Back in the group deathroll lobby after the reload.")
+                ArmLobbyTimeout(game)
+            elseif game.state == "lobby" and IsHost(game) then
+                -- the host hears from every player: anyone in any list is in
+                for _, n in ipairs(list) do
+                    if not IndexOf(game.players, n) and #game.players < GDR.MAX_PLAYERS then game.players[#game.players + 1] = n end
+                end
+            else
+                return
+            end
+            if IsHost(game) then SendAll(game, "GDR_LOBBY", { id = game.id, p = Names(game.players) }) end
+            UpdateLobbyStatus(game)
+            return
+        end
+
+        if f.st ~= "play" then return end
+        local k, i, m, left = tonumber(f.k), tonumber(f.i), tonumber(f.m), tonumber(f.t) or GDR.TURN_TIMEOUT
+        local alive = {}
+        for idx in tostring(f.a or ""):gmatch("%d+") do
+            local n = list[tonumber(idx)]
+            if not n or IndexOf(alive, n) then return end
+            alive[#alive + 1] = n
+        end
+        if not k or k < 1 or #alive < 2 or not i or i < 1 or i > #alive or not m or m < 2 or m > start then return end
+
+        if game and game.state == "play" then
+            -- another answer: a later step wins; at the same step, the host's view wins
+            local fromHost = ns.SameName(list[1], sender)
+            local same = k == game.n and game.max == m and #alive == #game.alive
+                and ns.SameName(game.alive[game.turnIdx] or "", alive[i])
+            if k > game.n or (k == game.n and fromHost and not same) then
+                for j, n in ipairs(alive) do alive[j] = game.players[IndexOf(game.players, n) or 0] or n end
+                ResumeGroup(game, k, alive, i, m, left)
+            end
+            return
+        end
+        if not game then
+            game = NewRoom({ id = f.id, host = list[1], bet = bet, start = start, players = list })
+        else
+            game.players = list -- (our lobby, which started while we were away)
+        end
+        game.verified = f.v ~= "0"
+        if k > 1 then game.history[1] = "(before your reload)" end
+        local lv, lm, lw = tonumber(f.lv), tonumber(f.lm), list[tonumber(f.lw) or 0]
+        if lv and lm and lw then game.lastRoll = { who = lw, value = lv, max = lm, seq = #game.history } end
+        local iAmIn = IndexOf(alive, ns.Me())
+        ns.Log("Back in the group deathroll after the reload - caught up from %s.%s", ns.Short(sender),
+            iAmIn and "" or " You're already out; the result is recorded when it ends.")
+        ResumeGroup(game, k, alive, i, m, left)
+    end,
+
+    done = function(f, sender)
+        local list = SentPlayers(f, sender)
+        local bet, start, w = tonumber(f.s), tonumber(f.n), tonumber(f.w)
+        local winner = list and w and list[w]
+        if not winner or not bet or bet < 0 or not start then return end
+        local game = Games.Get(f.id)
+        if game and (game.kind ~= "groupdr" or not IndexOf(game.players, sender)) then return end
+        if not game and not Games.recovering then return end
+        if not game then
+            -- already on our ledger (we saw the end ourselves before reloading)? nothing to do
+            if ns.IsMe(winner) then
+                for _, p in ipairs(list) do
+                    if not ns.IsMe(p) and ns.Ledger.FindGame(f.id, p) then return end
+                end
+            elseif ns.Ledger.FindGame(f.id, winner) then
+                return
+            end
+            if Games.Mine() then return end
+            game = NewRoom({ id = f.id, host = list[1], bet = bet, start = start, players = list })
+            game.verified = f.v ~= "0"
+            ns.Log("The group deathroll ended while you were reloading.")
+        end
+        game.state = "play"
+        game.alive = { winner }
+        Finish(game, winner)
+    end,
+}
+Games.recovery.groupdr = GDR.recovery

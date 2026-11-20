@@ -6,7 +6,30 @@ local Ledger = {}
 ns.Ledger = Ledger
 
 --- entry: { id, game, opponent, net (copper, + = they owe me), verified, practice }
+Ledger.DEDUP_WINDOW = 6 * 3600 -- a result for the same game and player within this long is a repeat
+
+--- The game result already on the ledger for this game id and opponent, if any (recent only:
+--- ids are short and could in theory come round again in a later session).
+function Ledger.FindGame(id, opponent)
+    if not id or not opponent then return nil end
+    local list = ns.charDB.ledger
+    local now = time()
+    for i = #list, 1, -1 do
+        local e = list[i]
+        if now - (e.time or 0) > Ledger.DEDUP_WINDOW then break end
+        if e.kind == "game" and e.id == id and ns.SameName(e.opponent or "", opponent) then return e end
+    end
+end
+
+--- Records a game result. The same game against the same player is only ever recorded once
+--- (it can reach us twice - e.g. the end of the game and a catch-up after a reload).
+--- Returns the entry, and false when it was a repeat (nothing added).
 function Ledger.Record(entry)
+    local existing = (entry.kind or "game") == "game" and Ledger.FindGame(entry.id, entry.opponent)
+    if existing then
+        ns.Debug("ledger: game %s vs %s already recorded", tostring(entry.id), tostring(entry.opponent))
+        return existing, false
+    end
     entry.time = time()
     entry.kind = entry.kind or "game"
     entry.settled = entry.practice and true or false
@@ -24,7 +47,7 @@ function Ledger.Record(entry)
             end)
         end
     end
-    return entry
+    return entry, true
 end
 
 --- Unsettled balance with one opponent (+ = they owe me, - = I owe them).

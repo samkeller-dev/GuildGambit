@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Group deathroll turn warnings are chat-only now - no more mid-screen messages. Full changelog on CurseForge."
+ns.WHATS_NEW = "A /reload mid-game no longer drops you out - your addon picks the game back up (or its result) from the other players. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 

@@ -5,6 +5,17 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.6 - 2026-11-21
+
+- **A /reload or disconnect no longer drops you out of a game.** After you log back in, your addon asks the guild whether you were in a game, and the other players' addons answer:
+  - **Deathroll and group deathroll:** you're back in where the game stands, with your Roll button and only the time that was left on your turn. A host who reloads keeps announcing the game in the Live tab.
+  - **Ended while you were away:** the result goes on your ledger exactly as it did on theirs.
+  - **Coinflip and blackjack:** these can't be picked up again (your hidden card is gone), so both sides cancel and nobody owes anything.
+- **A game result is never recorded twice**, even if it reaches your addon more than once.
+- **Group deathroll: a slow roller is still knocked out if the player meant to do it has reloaded or logged off.** The next player in line does it 10 seconds later. Before, the game stalled for 5 minutes and was then dropped with no result.
+- For about 20 seconds after you log in, new games and invites wait while your addon checks for a game in progress.
+- Catching up needs the other players on 2.4.6 too. Older versions don't answer, but your addon still catches up from their normal turn updates once someone rolls.
+
 ## 2.4.5 - 2026-11-21
 
 - **No more mid-screen messages in group deathrolls.** The turn and 30-second warnings now appear only in chat (with the warning sound and the countdown on the status line). The raid-warning-style message got in the way.

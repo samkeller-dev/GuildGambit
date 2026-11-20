@@ -27,6 +27,7 @@ end
 function events.PLAYER_LOGIN()
     ns.Comm.RegisterPrefix()
     ns.Guild.Request()
+    ns.Games.StartRecovery() -- were we in a game before this reload?
     -- no automatic trade/mail detection: other gold kept throwing the ledger off.
     -- Payments are recorded by hand and confirmed by the other player (Ledger.Request).
     if ns.MinimapButton then

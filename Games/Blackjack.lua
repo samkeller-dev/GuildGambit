@@ -231,7 +231,7 @@ end
 --- Blackjack against a guildie (head to head), or solo against the dealer with "practice".
 function BJ.Deal(opponent, betGold)
     if Games.Busy() then
-        ns.Print("Finish your current game first (or |cffffff00/gg cancel|r).")
+        ns.Print(Games.BusyText())
         return nil
     end
     local bet = ns.GoldToCopper(betGold)
@@ -563,7 +563,7 @@ end
 --- Challenges a guildie to head-to-head blackjack.
 function BJ.Challenge(target, betGold)
     if Games.Busy() then
-        ns.Print("Finish your current game first (or |cffffff00/gg cancel|r).")
+        ns.Print(Games.BusyText())
         return nil
     end
     local bet = ns.GoldToCopper(betGold)
