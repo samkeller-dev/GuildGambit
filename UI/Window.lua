@@ -990,8 +990,33 @@ local function Build()
     BuildPlay(Panel("play"))
     BuildLive(Panel("live"))
     if ns.Arcade then
-        local ok, err = pcall(ns.Arcade.Build, Panel("arcade"))
+        -- two games share the Arcade tab, each on its own frame; a button swaps them
+        local arcade = Panel("arcade")
+        local kodo = CreateFrame("Frame", nil, arcade)
+        kodo:SetAllPoints()
+        local ok, err = pcall(ns.Arcade.Build, kodo)
         if not ok then ns.Print("|cffff4040the Arcade tab failed to build: %s|r", tostring(err)) end
+        if ns.Roller and ns.Roller.UI then
+            local roller = CreateFrame("Frame", nil, arcade)
+            roller:SetAllPoints()
+            roller:Hide()
+            local ok2, err2 = pcall(ns.Roller.UI.Build, roller)
+            if ok2 then
+                local swap = Button(arcade, "", 100, function() UI.ArcadeGame(ns.db.arcadeGame == "roller" and "kodo" or "roller") end)
+                swap:SetPoint("TOPLEFT", 0, 2)
+                swap:SetFrameLevel(arcade:GetFrameLevel() + 40)
+                function UI.ArcadeGame(which)
+                    which = which == "roller" and "roller" or "kodo"
+                    ns.db.arcadeGame = which
+                    kodo:SetShown(which == "kodo")
+                    roller:SetShown(which == "roller")
+                    swap:SetText(which == "roller" and "Kodo Crossing" or "High Roller")
+                end
+                UI.ArcadeGame(ns.db.arcadeGame)
+            else
+                ns.Print("|cffff4040High Roller failed to build: %s|r", tostring(err2))
+            end
+        end
     end
     BuildLedger(Panel("ledger"))
     BuildBoard(Panel("board"))

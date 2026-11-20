@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "A /reload mid-game no longer drops you out - your addon picks the game back up (or its result) from the other players. Full changelog on CurseForge."
+ns.WHATS_NEW = "New: High Roller (beta), a casual survivors game for flight paths, in its own window - just for fun, no gold. /gg roller. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 
@@ -369,6 +369,16 @@ ns.SOUNDS = {
     coin    = { "LOOT_WINDOW_COIN_SOUND", "IG_QUEST_LIST_COMPLETE" },      -- a payment counted
     death   = { "IG_PLAYER_INVITE_DECLINE" },                              -- fallback for the death cry
     cheer   = {},                                                          -- the cheer has no fallback
+    -- High Roller
+    hr_hurt  = { "IG_CREATURE_AGGRO_SELECT", "IG_PLAYER_INVITE_DECLINE" },  -- you were hit
+    hr_kill  = { "U_CHAT_SCROLL_BUTTON", "IG_ABILITY_PAGE_TURN" },          -- something died
+    hr_chip  = { "IG_BACKPACK_COIN_SELECT", "LOOT_WINDOW_COIN_SOUND" },     -- chips picked up
+    hr_level = { "UI_BONUS_LOOT_ROLL_END", "IG_QUEST_LIST_COMPLETE" },      -- a level-up
+    hr_power = { "IG_BACKPACK_OPEN", "IG_CHARACTER_INFO_TAB" },             -- a power-up or a die off the floor
+    hr_chest = { "LOOT_WINDOW_OPEN_EMPTY", "IG_BACKPACK_OPEN" },            -- a chest opens
+    hr_heal  = { "IG_QUEST_LIST_OPEN", "IG_MAINMENU_OPTION_CHECKBOX_ON" },  -- healed
+    hr_warn  = { "UI_RAID_BOSS_WHISPER_WARNING", "MAP_PING" },              -- a boss attack is on the floor
+    hr_boss  = { "RAID_WARNING", "MAP_PING" },                              -- the boss arrives
 }
 
 -- Game sound files played by file ID (as working addons do with PlaySoundFile). Tried before
@@ -379,6 +389,8 @@ ns.SOUND_FILES = {
     lose  = 540873,              -- sound/character/nightelf/nightelffemale/nightelffemalecry01.ogg
     bust  = 540873,
     cheer = { 541043, 541055 },  -- sound/character/nightelf/nightelfvocalfemale/nightelffemalecheer01/02.ogg
+    hr_level = 569593,           -- sound/spells/levelup.ogg (the game's own level-up)
+    hr_hurt  = 568003,           -- sound/spells/rendtarget.ogg (Hemorrhage's hit)
 }
 
 function ns.Sound(event)

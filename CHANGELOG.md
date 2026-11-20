@@ -5,6 +5,26 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.5.0 - 2026-11-21
+
+- **New: High Roller (beta).** A casual survivors game, just for fun, with no gold involved. It plays in its own 800 x 600 window that you can move and resize: type `/gg roller`, or click **High Roller** at the top left of the Arcade tab and then **Play High Roller**.
+  - **Hand-painted look:** torch-lit casino rooms, animated enemies, tumbling dice, and level-up choices dealt as cards.
+  - **A five-picture guide** on the game's page in the Arcade tab shows how to play.
+  - **You only move** (WASD or the arrow keys). Your weapons fire on their own. The game pauses whenever you have a choice to make, and keys 1-3 pick.
+  - **Five casino rooms, a boss in each.** Every boss has a trick you solve by where you stand. Every boss attack is drawn on the floor in red before it lands, and it kills in one hit if you're still standing in it.
+  - **You play the Dicemaster,** who throws dice that throw again on doubles, and collects the good ones off the floor. More classes are coming later; they show as "??" in the menu.
+  - **Build as you go:** 13 more weapons that level up and evolve, stacking charms, relics from boss chests (some cursed), and set bonuses for collecting a suit.
+  - **Things to grab on the floor:** power-ups you walk over (Lucky Boots for speed, a Magnet, a Fire Alarm that clears the floor, a Stopwatch, and more), casino furniture to smash for chips, and chests from elites that pay out one, three or five prizes.
+  - **Rooms that keep changing:** a golden imp to chase, swarms, lucky tables, high rollers with guards, and a mini-boss halfway through each room.
+  - **Rare, Epic and Legendary** upgrade cards and relics. Luck makes the better ones turn up more often.
+  - **Bosses fire rapid barrages** between their big attacks. Every one is drawn on the floor first.
+  - **Three talent trees** for the Dicemaster, earned by playing and kept across your whole account. Resetting them is free.
+  - **Chips are your score.** After each boss you pick a relic and go straight on, or walk away and keep your chips: dying scores 0. You keep class experience and unlocks either way.
+  - **Personal bests only.** There's no leaderboard, and the game sends nothing to other players.
+  - **Made for flight paths:** a run is about 10 minutes (or about 6 in Quick Hand mode). It pauses when you land, enter combat or close the window, and a /reload puts you back at the start of the room you were in.
+  - It's a beta: the difficulty and rewards haven't been tuned by real play yet.
+- Kodo Crossing is still in the Arcade tab; the button at the top left swaps between the two games.
+
 ## 2.4.6 - 2026-11-21
 
 - **A /reload or disconnect no longer drops you out of a game.** After you log back in, your addon asks the guild whether you were in a game, and the other players' addons answer:
