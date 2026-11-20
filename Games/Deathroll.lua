@@ -741,7 +741,6 @@ local function TurnStatus(game, roller, max)
     return ("Waiting for %s to roll 1-%d (%s)"):format(ns.Short(roller), max, timeText), left
 end
 
-local CenterAlert = ns.CenterAlert
 
 --- Counts the turn down once a second on the status line, until the turn changes.
 local function TickTurn(game, step, roller, max)
@@ -773,9 +772,8 @@ function GroupTurn(game)
     if ns.IsMe(roller) then
         ns.Sound("turn")
         ns.UI.SetRollPrompt(1, max, "Roll 1-" .. max)
-        -- said in chat and mid-screen too, so it's seen with the window closed
+        -- said in chat too, so it's seen with the window closed
         ns.Print("|cffffff00Your turn in the group deathroll: /roll %d|r - %d seconds or you're out.", max, GDR.TURN_TIMEOUT)
-        CenterAlert(("GuildGambit: your turn - /roll %d"):format(max))
     else
         ns.UI.SetRollPrompt(nil)
     end
@@ -787,7 +785,6 @@ function GroupTurn(game)
         if ns.IsMe(roller) then
             ns.Sound("hurry")
             ns.Print("|cffff4040%d seconds left to /roll %d in the group deathroll, or you're out!|r", GDR.WARN_AT, max)
-            CenterAlert(("GuildGambit: %d seconds to /roll %d or you're out!"):format(GDR.WARN_AT, max))
         else
             ns.Log("%s has %d seconds left to roll.", ns.Short(roller), GDR.WARN_AT)
         end

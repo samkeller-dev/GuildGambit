@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Pay debts counts only gold that leaves your bags, records itself on both ledgers, and tells you when someone pays you. Full changelog on CurseForge."
+ns.WHATS_NEW = "Group deathroll turn warnings are chat-only now - no more mid-screen messages. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 
@@ -58,14 +58,6 @@ local PREFIX = "|cffffd100GuildGambit|r: "
 function ns.Print(fmt, ...)
     local text = select("#", ...) > 0 and fmt:format(...) or fmt
     print(PREFIX .. text)
-end
-
---- A big message in the middle of the screen (the raid warning spot), if the client has it.
-function ns.CenterAlert(text)
-    if RaidNotice_AddMessage and RaidWarningFrame then
-        local color = (ChatTypeInfo and ChatTypeInfo.RAID_WARNING) or { r = 1, g = 0.3, b = 0.1 }
-        pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
-    end
 end
 
 function ns.Debug(fmt, ...)

@@ -5,6 +5,10 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.5 - 2026-11-21
+
+- **No more mid-screen messages in group deathrolls.** The turn and 30-second warnings now appear only in chat (with the warning sound and the countdown on the status line). The raid-warning-style message got in the way.
+
 ## 2.4.4 - 2026-11-20
 
 - **Clearer wording in chat.** Fixed messages with bad English: the login debt reminder ("Eoka Pistol 5g owes you" now reads "Eoka Pistol owes you 5g"), "you only has 5g", payment lines ("You paid Bob 5g by mail. You still owe them 3g."), blackjack and coinflip results, group deathroll stakes for fun games, and lottery draw dates.
