@@ -94,8 +94,8 @@ function DR.Challenge(target, stakeGold, start)
     end
     local stake = ns.GoldToCopper(stakeGold)
     if not stake then ns.Print("Usage: /gg dr <player|practice> <wager> [start]  (wager like 10 or 1g 50s)") return nil end
-    local cant = ns.CantCover(stake)
-    if cant then ns.Print("Can't bet %s: you %s.", ns.Stake(stake), cant) return nil end
+    local cant, cantYou = ns.CantCover(stake)
+    if cant then ns.Print("Can't bet %s: %s.", ns.Stake(stake), cantYou) return nil end
     start = math.floor(tonumber(start) or DR.DEFAULT_START)
     if start < 2 or start > DR.MAX_START then ns.Print("Start must be 2-%d.", DR.MAX_START) return nil end
 
@@ -243,7 +243,7 @@ local function Land(game, v, verified)
     local won = landed == mine
     -- the result (sound, chat line, guild post) waits for the coin to stop spinning
     game.revealDelay = CF.SPIN
-    Games.Finish(game, won and game.bet or -game.bet, ("the coin landed %s"):format(CF.Label(landed)), won and 1 or -1)
+    Games.Finish(game, won and game.bet or -game.bet, ("the coin landed on %s"):format(CF.Label(landed)), won and 1 or -1)
 end
 
 --- Both players are in: watch for the challenger's roll, which comes after the countdown.
@@ -359,8 +359,8 @@ function CF.Challenge(target, betGold, call)
     call = CF.SIDES[call or ""] and call or CF.ParseCall(call) or MyFaction()
     local practice = target:lower() == "practice" or ns.IsMe(target)
     if not practice then
-        local cant = ns.CantCover(bet)
-        if cant then ns.Print("Can't bet %s: you %s.", ns.Stake(bet), cant) return nil end
+        local cant, cantYou = ns.CantCover(bet)
+        if cant then ns.Print("Can't bet %s: %s.", ns.Stake(bet), cantYou) return nil end
     end
     target = practice and CF.PRACTICE or ns.Full(target)
     if not practice and ns.House.CheckOpponent(target) then return nil end
@@ -583,15 +583,15 @@ function GDR.Open(betText, start)
     if not (IsInGuild and IsInGuild()) then ns.Print("Group deathrolls are for your guild - you're not in one.") return nil end
     local bet = ns.GoldToCopper(betText)
     if not bet then ns.Print("Usage: /gg group <wager> [start]  (wager like 10 or 1g50s)") return nil end
-    local cant = ns.CantCover(bet)
-    if cant then ns.Print("Can't bet %s: you %s.", ns.Stake(bet), cant) return nil end
+    local cant, cantYou = ns.CantCover(bet)
+    if cant then ns.Print("Can't bet %s: %s.", ns.Stake(bet), cantYou) return nil end
     start = math.floor(tonumber(start) or DR.DEFAULT_START)
     if start < 2 or start > DR.MAX_START then ns.Print("Start must be 2-%d.", DR.MAX_START) return nil end
 
     local game = NewRoom({ id = ns.NewId(), host = ns.Me(), bet = bet, start = start, players = { ns.Me() } })
     Comm.Send("GDR_OPEN", { id = game.id, s = bet, n = start, rm = Games.rematchTag }, nil)
-    ns.Log("You opened a group deathroll for %s each (1-%d). Press Start once guildies have joined.",
-        ns.Stake(bet), start)
+    ns.Log("You opened a group deathroll for %s (1-%d). Press Start once guildies have joined.",
+        ns.StakeEach(bet), start)
     UpdateLobbyStatus(game)
     C_Timer.After(GDR.LOBBY_TIMEOUT, function()
         if Games.Get(game.id) == game and game.state == "lobby" then Games.Cancel(game, "nobody started it") end
@@ -604,7 +604,7 @@ local function BeginPlay(game)
     game.alive = {}
     for i, n in ipairs(game.players) do game.alive[i] = n end
     game.turnIdx, game.max = 1, game.start
-    ns.Log("Group deathroll for %s each: %s. %s first.", ns.Stake(game.bet), NamesText(game.players),
+    ns.Log("Group deathroll for %s: %s. %s first.", ns.StakeEach(game.bet), NamesText(game.players),
         ns.IsMe(game.alive[1]) and "You roll" or (ns.Short(game.alive[1]) .. " rolls"))
     GroupTurn(game)
 end
@@ -658,7 +658,7 @@ local function Finish(game, winner)
         net, outcome = -game.bet, -1
     end
     game.finished, game.net, game.outcome = true, net, outcome
-    game.summary = ("%s %s the last one standing of %d"):format(iWon and "you" or ns.Short(winner),
+    game.summary = ("%s %s the last one standing out of %d"):format(iWon and "you" or ns.Short(winner),
         iWon and "are" or "is", #game.players)
     ns.Log("Group Deathroll: %s - %s%s", game.summary, ns.ResultText(net, outcome),
         verified and "" or " |cffff8800(unverified rolls)|r")
@@ -741,14 +741,7 @@ local function TurnStatus(game, roller, max)
     return ("Waiting for %s to roll 1-%d (%s)"):format(ns.Short(roller), max, timeText), left
 end
 
---- A big message in the middle of the screen (the raid warning spot), if the client has it.
-local function CenterAlert(text)
-    if RaidNotice_AddMessage and RaidWarningFrame then
-        local color = (ChatTypeInfo and ChatTypeInfo.RAID_WARNING) or { r = 1, g = 0.3, b = 0.1 }
-        pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
-    end
-end
-GDR.CenterAlert = CenterAlert
+local CenterAlert = ns.CenterAlert
 
 --- Counts the turn down once a second on the status line, until the turn changes.
 local function TickTurn(game, step, roller, max)
@@ -867,11 +860,11 @@ Comm.On("GDR_OPEN", function(f, sender)
     if ns.db.dnd then return end -- do not disturb: not even the invite
     if ns.House.CheckOpponent(sender) then return end -- versions don't match (shown in chat)
     if ns.CantCover(bet) then
-        ns.Log("%s opened a group deathroll for %s each - more than you can cover.", ns.Short(sender), ns.Stake(bet))
+        ns.Log("%s opened a group deathroll for %s - more than you can cover.", ns.Short(sender), ns.StakeEach(bet))
         return
     end
-    local text = ("%s%s opened a group deathroll for %s each (1-%d). Last one standing takes the pot. Join?"):format(
-        ns.RematchText(f.rm), ns.Short(sender), ns.Stake(bet), start)
+    local text = ("%s%s opened a group deathroll for %s (1-%d). The last one standing takes the pot. Join?"):format(
+        ns.RematchText(f.rm), ns.Short(sender), ns.StakeEach(bet), start)
     ns.UI.ShowInvite(text, function()
         if Games.Busy() then ns.Print("Finish your current game first.") return end
         if ns.CantCover(bet) then ns.Print("You can't cover %s.", ns.Stake(bet)) return end

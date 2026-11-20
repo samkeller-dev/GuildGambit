@@ -141,7 +141,7 @@ local warnedVersion
 local function CheckVersion(theirs, sender, whatsNew)
     if theirs and House.IsNewer(theirs, ns.version) and theirs ~= warnedVersion then
         warnedVersion = theirs
-        ns.Print("|cffffd100%s has GuildGambit v%s - you have v%s. Please update, older versions may not play with newer ones.|r",
+        ns.Print("|cffffd100%s has GuildGambit v%s - you have v%s. Please update - older versions may not play with newer ones.|r",
             ns.Short(sender), theirs, ns.version)
         -- (an incompatible version prints this with its red error instead)
         local p = House.peers[ns.Full(sender) or ""]

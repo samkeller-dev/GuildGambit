@@ -5,6 +5,11 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.4.4 - 2026-11-20
+
+- **Clearer wording in chat.** Fixed messages with bad English: the login debt reminder ("Eoka Pistol 5g owes you" now reads "Eoka Pistol owes you 5g"), "you only has 5g", payment lines ("You paid Bob 5g by mail. You still owe them 3g."), blackjack and coinflip results, group deathroll stakes for fun games, and lottery draw dates.
+- **You're told when someone pays you with Pay debts.** When a guildie's Pay debts mail reaches you, a line in chat says who mailed you how much. It's already on your ledger, so there's nothing to confirm. If you were offline, you're told when you next log in.
+
 ## 2.4.3 - 2026-11-19
 
 - **Pay debts only counts gold that actually leaves your bags.** Before, a mail the game called "sent" counted as paid even if no gold went with it, and the receiver's confirm popup made it look settled. Now each Pay debts mail counts only once its gold has gone. Then it's recorded on both ledgers straight away, with no popup for the receiver (they need 2.4.3 or newer; older versions still see the popup). If the gold doesn't leave within a few seconds, nothing is recorded and you're told.

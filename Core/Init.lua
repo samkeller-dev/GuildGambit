@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Pay debts now counts only gold that actually leaves your bags, and both ledgers update by themselves - no popup. Full changelog on CurseForge."
+ns.WHATS_NEW = "Pay debts counts only gold that leaves your bags, records itself on both ledgers, and tells you when someone pays you. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 
@@ -58,6 +58,14 @@ local PREFIX = "|cffffd100GuildGambit|r: "
 function ns.Print(fmt, ...)
     local text = select("#", ...) > 0 and fmt:format(...) or fmt
     print(PREFIX .. text)
+end
+
+--- A big message in the middle of the screen (the raid warning spot), if the client has it.
+function ns.CenterAlert(text)
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        local color = (ChatTypeInfo and ChatTypeInfo.RAID_WARNING) or { r = 1, g = 0.3, b = 0.1 }
+        pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
+    end
 end
 
 function ns.Debug(fmt, ...)
@@ -196,6 +204,12 @@ function ns.Stake(copper)
     return ns.Money(copper)
 end
 
+--- A per-player stake: "5g each", or "fun (0g)".
+function ns.StakeEach(copper)
+    if copper == 0 then return "fun (0g)" end
+    return ns.Money(copper) .. " each"
+end
+
 --- Win / loss / push text for a finished game. outcome (1, -1, 0) tells a 0g game's winner.
 function ns.ResultText(net, outcome)
     outcome = outcome or (net > 0 and 1 or net < 0 and -1 or 0)
@@ -207,14 +221,16 @@ function ns.ResultText(net, outcome)
     return "push"
 end
 
---- nil if we can put up `copper` (as a bet we might lose), otherwise why not.
+--- nil if we can put up `copper` (as a bet we might lose), otherwise why not - twice: as the
+--- other player is told it ("only has 5g") and as we're told it ("you only have 5g").
 function ns.CantCover(copper)
     if copper > ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD then
-        return ("bets are capped at %s"):format(ns.Money(ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD))
+        local why = ("bets are capped at %s"):format(ns.Money(ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD))
+        return why, why
     end
     local ok, money = pcall(GetMoney)
     if ok and type(money) == "number" and money < copper then
-        return ("only has %s"):format(ns.Money(money))
+        return ("only has %s"):format(ns.Money(money)), ("you only have %s"):format(ns.Money(money))
     end
     return nil
 end

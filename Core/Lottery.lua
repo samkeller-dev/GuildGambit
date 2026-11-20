@@ -376,7 +376,7 @@ Comm.On("LOT_DONE", function(f, sender)
 end)
 
 local function AnnounceText(L)
-    return ("|cffffd100%s opened a guild lottery!|r Tickets %s each (up to %d), drawn %s. Buy them at a mailbox from the Live tab."):format(
+    return ("|cffffd100%s opened a guild lottery!|r Tickets are %s each (up to %d); the draw is on %s. Buy them at a mailbox from the Live tab."):format(
         ns.Short(L.by), ns.Money(L.price), L.max, Lottery.When(L.drawAt))
 end
 
@@ -503,7 +503,7 @@ function Lottery.Open(opts)
         drawAt = math.floor(drawAt), created = Now(), state = "open" })
     data.cur = L
     Comm.Send("LOT_NEW", NewFields(L), nil)
-    ns.Log("Lottery created (not announced yet): tickets %s each, up to %d per player, drawn %s, pot held by %s. Check it, then click |cffffd100Announce|r to open ticket sales - or |cffffd100Close lottery|r if something's wrong.",
+    ns.Log("Lottery created (not announced yet): tickets %s each, up to %d per player, draw on %s, pot held by %s. Check it, then click |cffffd100Announce|r to open ticket sales - or |cffffd100Close lottery|r if something's wrong.",
         ns.Money(L.price), L.max, Lottery.When(L.drawAt), ns.Short(L.pot))
     Changed()
     return L
@@ -526,7 +526,7 @@ function Lottery.Announce()
     -- a deliberate click, so it's posted even with guild chat muted for game results
     local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or _G.SendChatMessage
     if send and IsInGuild and IsInGuild() then
-        pcall(send, ("[GuildGambit] Guild lottery open! Tickets %s each (up to %d per player), drawn %s. Buy them at a mailbox from GuildGambit's Live tab."):format(
+        pcall(send, ("[GuildGambit] Guild lottery open! Tickets are %s each (up to %d per player); the draw is on %s. Buy them at a mailbox from GuildGambit's Live tab."):format(
             ns.Money(L.price), L.max, Lottery.When(L.drawAt)), "GUILD")
     end
     ns.Log("Lottery announced - ticket sales are open.")
@@ -1089,7 +1089,7 @@ function Lottery.Buy(n)
     local job = { to = L.pot, amount = amount, n = n, id = L.id, had = mine, before = tonumber(Call(GetMoney)) }
     Lottery.sending = job
     local ok, err = pcall(SendMail, L.pot, Lottery.SUBJECT .. L.id,
-        ("%d GuildGambit lottery ticket%s (%s each), drawn %s."):format(n, n == 1 and "" or "s",
+        ("%d GuildGambit lottery ticket%s (%s each) for the draw on %s."):format(n, n == 1 and "" or "s",
             ns.Money(L.price), Lottery.When(L.drawAt)))
     if not ok then
         Lottery.sending = nil
@@ -1386,7 +1386,7 @@ function Lottery.Remind()
             ns.charDB.lotteryRemindDay = date("%Y%m%d")
             local _, pot = Lottery.Totals(L)
             local mine = Lottery.Mine(L)
-            ns.Print("|cffffd100Guild lottery:|r %s pot, drawn %s. %s Tickets are %s - buy them at a mailbox from the Live tab (sales close 1h15m before the draw).",
+            ns.Print("|cffffd100Guild lottery:|r %s pot, draw on %s. %s Tickets are %s - buy them at a mailbox from the Live tab (sales close 1h15m before the draw).",
                 ns.Money(pot), Lottery.When(L.drawAt),
                 mine > 0 and ("You have " .. mine .. " ticket" .. (mine == 1 and "" or "s") .. ".") or "You haven't got a ticket yet.",
                 ns.Money(L.price))

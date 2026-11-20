@@ -80,24 +80,31 @@ end
 ---------------------------------------------------------------------------
 Social.REMIND_AFTER = 10 -- seconds after login (after the loading-screen chat spam)
 
+--- "Bob 5g, Cid 3g and 2 more" (biggest first).
 local function List(debts)
     local out = {}
     for i, d in ipairs(debts) do
         if i > 5 then out[#out + 1] = ("%d more"):format(#debts - 5) break end
         out[#out + 1] = ("%s %s"):format(ns.Short(d.name), ns.Money(d.amount))
     end
-    return table.concat(out, ", ")
+    if #out == 1 then return out[1] end
+    return table.concat(out, ", ", 1, #out - 1) .. " and " .. out[#out]
 end
 
 --- Prints the reminder (returns true if there was anything to remind).
 function Social.RemindDebts()
     local owedToMe, iOwe = ns.Ledger.Debts()
     if #iOwe == 0 and #owedToMe == 0 then return false end
-    if #iOwe > 0 then
+    if #iOwe == 1 then
+        ns.Print("|cffff8040Reminder:|r you owe %s %s. Open a mailbox and click |cffffff00Pay debts|r in the Ledger tab.",
+            ns.Short(iOwe[1].name), ns.Money(iOwe[1].amount))
+    elseif #iOwe > 1 then
         ns.Print("|cffff8040Reminder:|r you owe %s. Open a mailbox and click |cffffff00Pay debts|r in the Ledger tab.", List(iOwe))
     end
-    if #owedToMe > 0 then
-        ns.Print("|cff20ff20Reminder:|r %s owe%s you.", List(owedToMe), (#owedToMe == 1) and "s" or "")
+    if #owedToMe == 1 then
+        ns.Print("|cff20ff20Reminder:|r %s owes you %s.", ns.Short(owedToMe[1].name), ns.Money(owedToMe[1].amount))
+    elseif #owedToMe > 1 then
+        ns.Print("|cff20ff20Reminder:|r you're owed money by %s.", List(owedToMe))
     end
     return true
 end

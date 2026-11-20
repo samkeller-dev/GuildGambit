@@ -126,10 +126,11 @@ function Ledger.Payment(opponent, copper, direction, via, onlyDebt)
     local cleared = Ledger.SettleIfSquare(opponent)
     ns.Sound("coin")
     local left = Ledger.Balance(opponent)
-    ns.Log("%s %s %s %s (%s).%s", direction == "paid" and "Paid" or "Received", ns.Money(amount),
-        direction == "paid" and "to" or "from", ns.Short(opponent), via or "manual",
+    local how = (via == "mail" and " by mail") or (via == "trade" and " by trade") or ""
+    ns.Log("%s%s.%s", direction == "paid" and ("You paid %s %s"):format(ns.Short(opponent), ns.Money(amount))
+            or ("%s paid you %s"):format(ns.Short(opponent), ns.Money(amount)), how,
         cleared and " |cff20ff20All square!|r" or (left > 0 and (" They still owe you " .. ns.Money(left) .. ".")
-            or (" You still owe " .. ns.Money(-left) .. ".")))
+            or (" You still owe them " .. ns.Money(-left) .. ".")))
     if ns.Board then ns.Board.Changed() end
     return amount
 end
@@ -278,6 +279,8 @@ ns.Comm.On("PAY_REQ", function(f, sender)
     if kind == "paid" and mail and f.a then
         Answered()[f.id] = time()
         Apply("received", sender, copper, "mail")
+        -- just so they know (nothing to confirm)
+        ns.Print("|cff20ff20%s mailed you %s|r for what they owed - it's in your mailbox (already on your ledger).", who, ns.Money(copper))
         return ns.Comm.Send("PAY_OK", { id = f.id }, sender)
     end
     local text

@@ -79,9 +79,10 @@ local function Finish(game)
     game.bigWin, game.bust = outcome == "blackjack", outcome == "bust"
     local playerNet = math.floor(game.bet * mult)
     if game.asHouse then ns.House.bjGame = nil end
-    local summary = ("%s %s vs dealer %s - %s"):format(
+    local summary = ("%s had %s, the dealer had %s%s"):format(
         IsPlayer(game) and "you" or ns.Short(game.opponent),
-        Rules.ValueText(game.p), Rules.ValueText(game.d), outcome)
+        Rules.ValueText(game.p), Rules.ValueText(game.d),
+        (outcome == "blackjack" and " - blackjack!") or (outcome == "bust" and " - bust") or "")
     local sign = mult > 0 and 1 or mult < 0 and -1 or 0
     Games.Finish(game, game.asHouse and -playerNet or playerNet, summary, game.asHouse and -sign or sign)
 end
@@ -365,7 +366,7 @@ local function FinishDuel(game, forfeit)
         game.bust, game.bigWin = a == -1, a == 22 and b ~= 22
         outcome = a > b and 1 or (a < b and -1 or 0)
         net = stake * outcome
-        why = ("you %s vs %s %s"):format(Rules.ValueText(mine.cards), ns.Short(game.opponent), Rules.ValueText(theirs.cards))
+        why = ("you had %s, %s had %s"):format(Rules.ValueText(mine.cards), ns.Short(game.opponent), Rules.ValueText(theirs.cards))
     end
     Games.Finish(game, net, why, outcome)
 end
@@ -567,8 +568,8 @@ function BJ.Challenge(target, betGold)
     end
     local bet = ns.GoldToCopper(betGold)
     if not bet or not target or target == "" then ns.Print("Usage: /gg bj <wager> <player>") return nil end
-    local cant = ns.CantCover(bet)
-    if cant then ns.Print("Can't bet %s: you %s.", ns.Stake(bet), cant) return nil end
+    local cant, cantYou = ns.CantCover(bet)
+    if cant then ns.Print("Can't bet %s: %s.", ns.Stake(bet), cantYou) return nil end
     target = ns.Full(target)
     if ns.House.CheckOpponent(target) then return nil end
     local game = NewDuel({ id = ns.NewId(), a = ns.Me(), b = target, opponent = target, bet = bet, state = "invite" })

@@ -765,7 +765,7 @@ function LUI.ConfirmRow(e)
         ns.UI.ShowInvite(("Take back your confirmation of %s's gold?"):format(ns.Short(e.name)),
             function() ns.Lottery.Confirm(e.name, true) end, function() end)
     elseif not e.verified then
-        ns.UI.ShowInvite(("Confirm %s's %s for %d ticket%s arrived? Only do this if the gold is in your bags."):format(
+        ns.UI.ShowInvite(("Confirm that %s's %s for %d ticket%s has arrived? Only do this if the gold is in your bags."):format(
             ns.Short(e.name), ns.Money(e.stake), e.n, e.n == 1 and "" or "s"),
             function() ns.Lottery.Confirm(e.name) end, function() end)
     end

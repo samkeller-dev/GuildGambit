@@ -1082,7 +1082,7 @@ local function RefreshPlay(p)
     local shown = game or ns.Games.last
     RefreshTable(p, shown)
     if game and game.kind == "groupdr" then
-        p.status:SetText(("Group Deathroll - %s each, %d players:  %s"):format(ns.Stake(game.bet),
+        p.status:SetText(("Group Deathroll - %s, %d players:  %s"):format(ns.StakeEach(game.bet),
             #game.players, game.status or ""))
     elseif game then
         p.status:SetText(("%s vs %s - %s:  %s"):format(game.title, ns.Short(game.opponent),
