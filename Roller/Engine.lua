@@ -55,12 +55,11 @@ end
 ---------------------------------------------------------------------------
 -- A new run
 ---------------------------------------------------------------------------
---- opts: class, mode ("full"/"quick"), stakes, rule, seed.
+--- opts: mode ("full"/"quick"), stakes, rule, seed; weapon (the tests start with another one).
 function HR.NewRun(opts)
     opts = opts or {}
     local db = HR.DB()
-    local class = opts.class or db.class
-    if not HR.ClassUnlocked(class) then class = "dice" end
+    local class = HR.HERO
     local seed = opts.seed or math.random(1, 2147483646)
     local g = {
         seed = seed, rand = HR.NewRand(seed), class = class, mode = opts.mode or "full", stakes = opts.stakes or 0,
@@ -87,9 +86,8 @@ function HR.NewRun(opts)
     else
         g.order = { 1, 2, 3, 4, 5 }
     end
-    g.weapons[1] = { id = HR.CLASS[class].weapon, lvl = 1, cd = 0.5 }
-    if class == "coin" then g.coin = { side = "H", streak = 0, lost = 0, best = 0 } end
-    if class == "dice" and HR.T(g, "df5") > 0 then g.heldDice = { 6, 6 } end
+    local start = HR.WEAPON[opts.weapon or ""] and opts.weapon or HR.CLASS[class].weapon
+    g.weapons[1] = { id = start, lvl = 1 + (start == "revolver" and HR.T(g, "hm5") or 0), cd = 0.5 }
     if g.rule == "lucky" then g.luck = 15 end
     if (g.stakes or 0) >= 1 then g.heat = 0 end
     HR.Recalc(g)
@@ -121,13 +119,17 @@ function HR.Snapshot(g)
     for k, v in pairs(g.talents) do s.talents[k] = v end
     for k, v in pairs(g.dmgBy) do s.dmgBy[k] = v end
     if g.coin then s.coin = { side = g.coin.side, streak = g.coin.streak, best = g.coin.best } end
+    if g.boosts then
+        s.boosts = {}
+        for k, v in pairs(g.boosts) do s.boosts[k] = v end
+    end
     return s
 end
 
 --- Rebuilds a run at the start of the room it was saved in. Returns nil if the save is no good.
 function HR.Restore(s)
-    if type(s) ~= "table" or not HR.CLASS[s.class or ""] or type(s.order) ~= "table" or type(s.weapons) ~= "table" then return nil end
-    local g = HR.NewRun({ class = s.class, mode = s.mode, stakes = s.stakes, rule = s.rule or "none", seed = (s.seed or 1) + (s.roomPos or 1),
+    if type(s) ~= "table" or s.class ~= HR.HERO or type(s.order) ~= "table" or type(s.weapons) ~= "table" then return nil end
+    local g = HR.NewRun({ mode = s.mode, stakes = s.stakes, rule = s.rule or "none", seed = (s.seed or 1) + (s.roomPos or 1),
         noSave = true, noBets = true, noTips = true })
     g.noSave, g.noBets, g.menu = nil, nil, nil
     for _, k in ipairs(SAVE_FIELDS) do if s[k] ~= nil and k ~= "seed" then g[k] = s[k] end end
@@ -140,9 +142,13 @@ function HR.Restore(s)
     for k, v in pairs(s.relics or {}) do if HR.RELIC[k] then g.relics[k] = v end end
     for k, v in pairs(s.talents or {}) do g.talents[k] = v end
     for k, v in pairs(s.dmgBy or {}) do g.dmgBy[k] = v end
-    if g.class == "coin" then
-        local c = s.coin or {}
-        g.coin = { side = c.side or "H", streak = c.streak or 0, lost = 0, best = c.best or 0 }
+    if type(s.boosts) == "table" then
+        g.boosts = {}
+        for k, v in pairs(s.boosts) do if HR.BOOST[k] and type(v) == "number" then g.boosts[k] = v end end
+    end
+    if type(s.coin) == "table" then
+        local c = s.coin
+        g.coin = { side = c.side == "T" and "T" or "H", streak = c.streak or 0, lost = 0, best = c.best or 0 }
     end
     HR.Recalc(g)
     g.pl.hp = clamp(s.hp or g.st.maxhp, 1, g.st.maxhp)
@@ -202,21 +208,10 @@ end
 function HR.Hurt(g, dmg, why)
     local pl, st = g.pl, g.st
     if g.phase == "over" or pl.iframes > 0 or g.god then return false end
-    -- the Coin Flipper on Tails, with the talent: a streak step instead of health
-    if g.coin and g.coin.side == "T" and g.coin.streak > 0 and HR.T(g, "ot4") > 0 then
-        g.coin.streak = g.coin.streak - 1
-        pl.iframes = st.iframes
-        HR.Text(g, pl.x, pl.y + 14, "streak -1", "ffffd100")
-        HR.Recalc(g)
-        return false
-    end
     if g.mgTaken then dmg, g.mgTaken = dmg * 2, nil end
     if HR.Relic(g, "martingale") then g.mgTaken = true end
     local blocked = min(dmg - 1, st.armor)
-    if blocked > 0 then
-        dmg = dmg - blocked
-        if HR.T(g, "ot5") > 0 and g.coin and g.coin.side == "T" then g.reflect = (g.reflect or 0) + blocked * 3 end
-    end
+    if blocked > 0 then dmg = dmg - blocked end
     if (pl.shield or 0) > 0 then
         local a = min(pl.shield, dmg)
         pl.shield, dmg = pl.shield - a, dmg - a
@@ -398,22 +393,23 @@ function HR.Kill(g, e, wid)
             local ace = HR.FindWeapon(g, "ace")
             if ace and ace.evo and (g.time - (ace.lastFree or -1)) > 0.3 then ace.cd, ace.lastFree = 0, g.time end
         end
-        -- class pickups
-        if g.class == "cards" and not e.boss then
-            local w = HR.FindWeapon(g, "flick")
-            local every = (w and HR.WVal(w, "drop") or 6) / (1 + 0.1 * HR.T(g, "cq2"))
+        if e.dots then HR.DotDeath(g, e) end
+        -- pickups for the weapons that have a game of their own
+        local flick, tcoin = HR.FindWeapon(g, "flick"), HR.FindWeapon(g, "trickcoin")
+        if flick and not e.boss then
+            local every = HR.WVal(flick, "drop") or 6
             g.cardKills = (g.cardKills or 0) + 1
             if g.cardKills >= every then
                 g.cardKills = 0
                 HR.DropCard(g, e.x, e.y)
             end
-        elseif g.class == "coin" and not e.boss then
-            local w = HR.FindWeapon(g, "trickcoin")
-            local every = (w and HR.WVal(w, "drop") or 15) / (1 + 0.15 * HR.T(g, "oe3"))
+        end
+        if tcoin and not e.boss then
+            local every = HR.WVal(tcoin, "drop") or 15
             g.flipKills = (g.flipKills or 0) + 1
             if e.elite or g.flipKills >= every then
                 g.flipKills = 0
-                HR.DropPickup(g, { kind = "flip", x = e.x, y = e.y, life = 8 + 2 * HR.T(g, "oe2") })
+                HR.DropPickup(g, { kind = "flip", x = e.x, y = e.y, life = 8 })
             end
         end
         -- splitting
@@ -447,8 +443,7 @@ function HR.Hit(g, e, dmg, wid, opts)
     -- a lucky hit?
     g.attacks = (g.attacks or 0) + 1
     local lucky = not opts.noLucky and (g.rand.chance(st.luckyChance)
-        or (HR.Relic(g, "shoe6") and g.attacks % 6 == 0)
-        or (g.coin and g.coin.side == "H" and g.coin.streak >= 7 and HR.T(g, "oh5") > 0))
+        or (HR.Relic(g, "shoe6") and g.attacks % 6 == 0))
     -- dodges and shields
     if ((def and def.lucky) or e.trait == "lucky") and g.rand.chance(0.33) and not (lucky and HR.CharmMax(g, "gambler")) then
         HR.Text(g, e.x, e.y + 12, "dodge", "ffaaaaaa")
@@ -474,15 +469,24 @@ function HR.Hit(g, e, dmg, wid, opts)
     dmg = dmg * st.dmg
     if lucky then
         dmg = dmg * st.luckyMult * (st.luckyTwice and 2 or 1)
-        if g.coin and g.coin.side == "H" and HR.T(g, "oh3") > 0 and g.rand.chance(0.1) then
-            g.coin.streak = min(HR.StreakCap(g), g.coin.streak + 1)
-        end
     end
     if g.mgHit then dmg, g.mgHit = dmg * 2, nil end
     if (e.jinx or 0) > 0 then dmg = dmg * (1 + st.jinxAmp + (e.jinxStrong and 0.1 or 0)) end
     if st.punish and ((e.stun or 0) > 0 or (e.slow or 0) > 0) then dmg = dmg * 1.4 end
     if e.suit and wid and HR.WEAPON[wid] and HR.WEAPON[wid].suit == e.suit then dmg = dmg * 0.5 end
     if e.dr then dmg = dmg * (1 - e.dr) end
+    -- bosses and the Enforcer can't be burst down: past 5% of their health in any one second,
+    -- only a quarter of the damage gets through (so a strong build is still faster, not instant)
+    if (e.boss or e.mini) and not opts.raw then
+        if g.time - (e.gateT or -9) >= 1 then e.gateT, e.gateD = g.time, 0 end
+        local allow = max(0, e.maxhp * HR.BOSS_GATE - e.gateD)
+        if dmg > allow then dmg = allow + (dmg - allow) * 0.25 end
+        e.gateD = e.gateD + dmg
+    end
+    -- lifesteal: a share of the damage dealt, paid out as a trickle in StepPlayer
+    if st.lifesteal > 0 and not e.obj then
+        g.leech = (g.leech or 0) + min(dmg, max(0, e.hp)) * st.lifesteal * ((lucky and HR.CharmMax(g, "vig")) and 2 or 1)
+    end
     e.hp = e.hp - dmg
     e.flashAt = g.clock
     if lucky and HR.Fx then HR.Fx(g, "spark", e.x, e.y + 4, 0.3) end
@@ -495,7 +499,7 @@ function HR.Hit(g, e, dmg, wid, opts)
     if lucky or dmg >= 20 or e.boss then
         HR.Text(g, e.x, e.y + e.size * 0.5, tostring(floor(dmg + 0.5)), lucky and "ffffd100" or "ffffffff")
     end
-    if st.execute and not e.boss and not e.obj and e.hp > 0 and e.hp < e.maxhp * 0.2 then e.hp = 0 end
+    if st.execute and not e.boss and not e.mini and not e.obj and e.hp > 0 and e.hp < e.maxhp * 0.2 then e.hp = 0 end
     if st.knock > 0 and not e.boss and not e.obj and not (def and def.heavy) then
         local a = atan2(e.y - g.pl.y, e.x - g.pl.x)
         e.x, e.y = e.x + cos(a) * 5 * st.knock, e.y + sin(a) * 5 * st.knock
@@ -675,6 +679,7 @@ local function StepZones(g, dt)
                         if not e.dead and not e.untarget and dist(z.x, z.y, e.x, e.y) <= z.r + e.r then
                             HR.Hit(g, e, z.dmg, z.wid)
                             if z.slow and not e.boss then e.slow = max(e.slow or 0, 0.6) end
+                            if z.dot and not e.dead then HR.Dot(g, e, z.wid, z.dot, 3, 1) end
                         end
                     end
                     if z.onTick then z.onTick(g, z) end
@@ -846,20 +851,11 @@ local function StepEnemyShots(g, dt)
 end
 
 ---------------------------------------------------------------------------
--- Pickups: chips fly to you; class pickups (dice, cards, flip coins) must be walked over
+-- Pickups: chips fly to you; everything else (dice, cards, flip coins, crates) must be walked over
 ---------------------------------------------------------------------------
 function HR.DropCard(g, x, y)
     local c = HR.DrawCard(g)
-    local life = 6 + HR.T(g, "cq1")
-    local p = HR.DropPickup(g, { kind = "card", x = x, y = y, card = c, life = life })
-    if p and HR.T(g, "cs5") > 0 then
-        local before = HR.HandPromise(g.hand)
-        local with = {}
-        for i, h in ipairs(g.hand) do with[i] = h end
-        with[#with + 1] = c
-        p.glow = HR.HandPromise(with) > before + 1
-    end
-    return p
+    return HR.DropPickup(g, { kind = "card", x = x, y = y, card = c, life = 6 })
 end
 
 local function Collect(g, p)
@@ -890,7 +886,7 @@ local function Collect(g, p)
     elseif p.kind == "card" then
         g.hand[#g.hand + 1] = p.card
         HR.Event(g, "card")
-        if #g.hand >= (HR.T(g, "cq5") > 0 and 6 or 5) then HR.PlayHand(g) end
+        if #g.hand >= 5 then HR.PlayHand(g) end
     elseif p.kind == "flip" then
         local c = g.coin
         if c then
@@ -920,7 +916,18 @@ local function StepPickups(g, dt)
                     p.pull = true
                 end
                 p.raked = nil
-                if p.pull then d = MoveToward(p, pl.x, pl.y, 260 + p.age * 120, dt) end
+                if p.pull then
+                    -- it speeds up from the moment it's caught (not from how long it has lain there),
+                    -- and never steps past you: a chip that overshot used to dart back and forth
+                    p.pullT = (p.pullT or 0) + dt
+                    local step = (220 + p.pullT * 900) * dt
+                    if step >= d - 8 then
+                        p.x, p.y, d = pl.x, pl.y, 0
+                    else
+                        p.x, p.y = p.x + (pl.x - p.x) / d * step, p.y + (pl.y - p.y) / d * step
+                        d = d - step
+                    end
+                end
                 if d <= 10 then Collect(g, p) gone = true end
             else
                 if p.life and p.age >= p.life then gone = true
@@ -953,9 +960,7 @@ function HR.PlayHand(g)
         end
     end
     local w = HR.FindWeapon(g, "flick")
-    local power = (1 + 0.1 * HR.T(g, "ch1")) * (w and HR.WVal(w, "hand") or 1)
-    if rank <= 2 then power = power * (1 + 0.15 * HR.T(g, "cq3")) end
-    if rank == 6 then power = power * (1 + 0.25 * HR.T(g, "ch3")) end
+    local power = w and HR.WVal(w, "hand") or 1
     local B = 18 * (1 + 0.6 * (g.diff - 1)) * power
     local wid = "flick"
     local function volley(n, dmg)
@@ -1029,7 +1034,6 @@ function HR.PlayHand(g)
         HR.Taunt(g, "jackpot")
         HR.Event(g, "jackpot")
     end
-    if rank >= 4 and HR.T(g, "ch4") > 0 then pl.shield = min(60, (pl.shield or 0) + 15 * HR.T(g, "ch4")) end
     -- 52 Pickup: cards rain on up to twelve enemies
     if w and w.evo then
         local vis = HR.Visible(g)
@@ -1067,6 +1071,11 @@ function HR.TakeCard(g, card)
         HR.Event(g, "bigwin")
     elseif card.kind == "charm" then
         g.charms[card.id] = min(HR.CHARM[card.id].max, (g.charms[card.id] or 0) + (card.amount or 1))
+    elseif card.kind == "boost" then
+        g.boosts = g.boosts or {}
+        g.boosts[card.id] = (g.boosts[card.id] or 0) + 1
+        HR.Recalc(g)
+        if HR.BOOST[card.id].hp then HR.Heal(g, HR.BOOST[card.id].hp) end
     elseif card.id == "chips" then
         HR.AddChips(g, 60)
     elseif card.id == "heal" then
@@ -1243,11 +1252,7 @@ function HR.StartRoom(g, pos, restoring)
     g.noHeal = g.noHealNext
     g.noHealNext = nil
     if HR.Relic(g, "suite") then g.pl.hp = g.st.maxhp end
-    if g.coin and HR.T(g, "oe5") > 0 then g.coin.free = true end
-    if g.class == "cards" then
-        g.nuts = HR.T(g, "ch5") > 0 or nil
-        if HR.T(g, "cs3") > 0 and #g.hand == 0 then g.hand[1] = { joker = true } end
-    end
+    if HR.T(g, "hg5") > 0 then g.pl.shield = max(g.pl.shield or 0, 20) end
     g.loanActive = HR.Relic(g, "loanmark")
     HR.Recalc(g)
     -- saved here, so a reload brings you back to the start of this room
@@ -1446,25 +1451,30 @@ local function StepPlayer(g, dt)
         HR.Heal(g, r / max(0.01, st.heal))
         if HR.CharmMax(g, "insurance") and g.refund <= 0 and pl.hp >= before then pl.shield = max(pl.shield or 0, 6) end
     end
+    -- lifesteal: at most 4% of your health a second, and none of it is saved up for later
+    if (g.leech or 0) > 0 then
+        local r = min(g.leech, st.maxhp * 0.04 * dt, max(0, st.maxhp - pl.hp))
+        g.leech = min(g.leech - r, st.maxhp * 0.04)
+        if pl.hp >= st.maxhp then g.leech = 0 end
+        if r > 0 and st.heal > 0 and not g.noHeal then
+            pl.hp = pl.hp + r
+            g.leeched = (g.leeched or 0) + r
+            -- (a green number now and then, so you can see it working)
+            g.leechShown = (g.leechShown or 0) + r
+            if g.leechShown >= 5 then
+                HR.Text(g, pl.x, pl.y + 22, ("+%d"):format(floor(g.leechShown + 0.5)), "ff40ff60")
+                g.leechShown = 0
+            end
+        end
+    end
     if g.loanActive and not g.god then
         pl.hp = pl.hp - 2 * dt
         if pl.hp <= 0 then pl.hp = 0 HR.Die(g) return end
-    end
-    if g.coin and g.coin.side == "T" and HR.T(g, "ot3") > 0 and g.coin.streak > 0 then
-        g.tailHeal = (g.tailHeal or 0) + dt
-        local every = HR.T(g, "ot3") >= 2 and 3.5 or 5
-        if g.tailHeal >= every then g.tailHeal = 0 HR.Heal(g, g.coin.streak) end
     end
     -- Hearts flush: a full shield pulses
     if st.pulse and (pl.shield or 0) >= 28 then
         g.pulseT = (g.pulseT or 0) + dt
         if g.pulseT >= 2 then g.pulseT = 0 HR.Blast(g, pl.x, pl.y, 90 * st.area, 20 * g.diff, "hearts") end
-    end
-    -- reflected damage (Tails You Lose)
-    if (g.reflect or 0) > 0 then
-        local e = HR.Nearest(g, pl.x, pl.y)
-        if e then HR.ShootAt(g, pl.x, pl.y, e, 240, { dmg = g.reflect, wid = "trickcoin", sprite = "tcoin", exact = true }) end
-        g.reflect = 0
     end
     -- side bets that watch where you stand
     local bet = g.bet
@@ -1476,6 +1486,7 @@ end
 
 local function StepWeapons(g, dt)
     local st = g.st
+    HR.StepDots(g, dt)
     for _, w in ipairs(g.weapons) do
         local stepper = HR.WSTEP[w.id]
         if stepper then stepper(g, w, dt) end
@@ -1566,8 +1577,8 @@ function HR.Step(g, dt)
         end
     elseif g.phase == "boss" then
         g.bossTime = (g.bossTime or 0) + dt
-        -- the Card Sharp is dealt cards in a boss fight, where there's little to kill
-        if g.class == "cards" then
+        -- Flick is dealt cards in a boss fight, where there's little to kill
+        if HR.FindWeapon(g, "flick") then
             g.bossCardT = (g.bossCardT or 3) - dt
             if g.bossCardT <= 0 then
                 g.bossCardT = 3

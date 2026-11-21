@@ -511,6 +511,7 @@ function LUI.Refresh()
             r.n:SetText(tostring(e.n))
             r.stake:SetText(ns.Money(e.stake))
             r.paid:SetText(e.manual and "|cff20ff20confirmed|r" or (e.verified and "|cff20ff20received|r"
+                or (e.unpaid > 0 and "|cffff4040not paid|r")
                 or (e.received > 0 and "|cffffd100part|r" or "|cff888888in mail|r")))
             r.entry, r.canConfirm = e, ns.IsMe(L.pot) and (L.state == "open" or L.state == "drawn")
         end
@@ -559,6 +560,13 @@ function LUI.Refresh()
         end
         for _, r in ipairs(owes.refunds) do
             lines[#lines + 1] = ("Missed the draw: %s - refund %s"):format(ns.Short(r.to), ns.Money(r.amount))
+        end
+        local unpaid = {}
+        for _, e in ipairs(players) do
+            if e.unpaid > 0 then unpaid[#unpaid + 1] = ("%s (%d)"):format(ns.Short(e.name), e.unpaid) end
+        end
+        if #unpaid > 0 then
+            lines[#lines + 1] = "|cffff8040Not paid, left out of the draw:|r " .. table.concat(unpaid, ", ")
         end
         hint = table.concat(lines, "\n")
         view.markPaid:SetShown(settler and owes.winner ~= nil)

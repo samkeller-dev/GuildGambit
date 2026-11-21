@@ -37,6 +37,8 @@ Lottery.REVEAL = 5               -- seconds the draw's number spins; nobody is t
 Lottery.ROLL_TIMEOUT = 30        -- seconds to see the draw's roll before giving up
 Lottery.MAIL_WAIT = 8            -- seconds before saying the mail is taking a while
 Lottery.MONEY_WAIT = 5           -- seconds after "mail sent" for the gold to leave our bags
+Lottery.SEND_TIMEOUT = 30        -- seconds a ticket mail waits for the game's "sent" before it stops claiming
+Lottery.MAIL_DELAY = 3600        -- ticket mail sent before sales close has arrived this long after
 Lottery.BRISBANE = 10 * 3600     -- UTC+10, no daylight saving
 
 local function Now() return (GetServerTime and GetServerTime()) or time() end
@@ -131,19 +133,48 @@ function Lottery.TicketsOf(L, name)
     return math.min(L.max, math.max(claimed, paid))
 end
 
---- { { name, n, stake, received, verified } } most tickets first.
+--- The tickets a player's gold (as the pot character's mailbox saw it) pays for, up to the limit.
+function Lottery.PaidTickets(L, name)
+    if (L.price or 0) <= 0 then return 0 end
+    return math.min(L.max, math.floor((L.received[name] or 0) / L.price))
+end
+
+--- The time from which the pot character's mailbox shows every ticket's gold: all ticket mail
+--- was sent before sales closed, and mail takes up to an hour to arrive.
+function Lottery.MailCheckDue(L) return Lottery.SalesClose(L) + Lottery.MAIL_DELAY end
+
+--- True once the pot character has read their mailbox late enough to prove every ticket's gold:
+--- from then on a claimed ticket with no gold behind it is "not paid" and stays out of the draw.
+function Lottery.MailChecked(L)
+    return L ~= nil and (L.potChecked or 0) >= Lottery.MailCheckDue(L)
+end
+
+--- The tickets a player takes into the draw: all of them, unless the mailbox has proven some unpaid.
+function Lottery.DrawTickets(L, name)
+    local n = Lottery.TicketsOf(L, name)
+    if Lottery.MailChecked(L) then return math.min(n, Lottery.PaidTickets(L, name)) end
+    return n
+end
+
+--- { { name, n, stake, received, verified, unpaid } } most tickets first. unpaid: claimed
+--- tickets known to have no gold behind them (left out of the draw).
 function Lottery.Players(L)
     if not L then return {} end
     Fresh(L)
     local names, out = {}, {}
     for name in pairs(L.tickets) do names[name] = true end
     for name in pairs(L.received) do names[name] = true end
+    local checked = Lottery.MailChecked(L)
     for name in pairs(names) do
         local n = Lottery.TicketsOf(L, name)
         if n > 0 then
             local received = L.received[name] or 0
+            local paidN = math.min(n, Lottery.PaidTickets(L, name))
+            -- (a ticket that made the draw counts, whatever the gold)
+            local inDraw = (L.state == "drawn" and L.drawn and L.drawn[name]) or 0
+            local unpaid = checked and n - math.max(paidN, inDraw) or 0
             out[#out + 1] = { name = name, n = n, stake = n * L.price, received = received,
-                verified = received >= n * L.price,
+                verified = received >= n * L.price, unpaid = math.max(0, unpaid),
                 manual = (L.manual[name] or 0) > (L.collected[name] or 0) + (L.inbox[name] or 0) }
         end
     end
@@ -670,19 +701,30 @@ local function TellWinner(L)
     ns.Sound("bigwin")
 end
 
---- After the draw: tickets that weren't in it (owed back by the pot character, by hand).
+--- After the draw: paid tickets that weren't in it (owed back by the pot character, by hand).
+--- Claimed tickets with no gold behind them aren't owed anything; they show as "not paid".
 CheckMissed = function(L)
     if not L.drawn then return end
     L.missed = {}
+    local unpaidMine = 0
+    local checked = Lottery.MailChecked(L)
     for _, e in ipairs(Lottery.Players(L)) do
-        local left = e.n - (L.drawn[e.name] or 0)
+        -- (until the mailbox proves otherwise, a claimed ticket is taken as paid, as it was in the draw)
+        local owned = checked and math.min(e.n, Lottery.PaidTickets(L, e.name)) or e.n
+        local left = owned - (L.drawn[e.name] or 0)
         if left > 0 then L.missed[e.name] = left * L.price end
+        if ns.IsMe(e.name) then unpaidMine = e.unpaid end
     end
     local mine = L.missed[ns.Me()]
     if mine and not L.toldMissed then
         L.toldMissed = true
         ns.Log("|cffff8040%d of your lottery tickets weren't in the draw|r - %s owes you %s back. Tell an officer if it isn't sorted.",
             mine / L.price, ns.Short(L.pot), ns.Money(mine))
+    end
+    if unpaidMine > 0 and not L.toldUnpaid then
+        L.toldUnpaid = true
+        ns.Log("|cffff8040%d of your lottery tickets weren't in the draw:|r %s's mailbox never got the gold for them. If the gold did leave your bags, tell an officer.",
+            unpaidMine, ns.Short(L.pot))
     end
 end
 
@@ -940,10 +982,11 @@ function Lottery.Draw(force)
         return false
     end
     if Lottery.drawing then return false end
-    -- the pot character's mailbox proves every paid ticket: warn if it hasn't been checked since sales closed
-    if not force and not ns.IsMe(L.pot) and (L.potChecked or 0) < Lottery.SalesClose(L) then
-        ns.UI.ShowInvite(("%s hasn't checked their mailbox since ticket sales closed, so some paid tickets may be missing. Draw anyway?"):format(
-            ns.Short(L.pot)), function() Lottery.Draw(true) end, function() end)
+    -- the pot character's mailbox proves every ticket's gold: warn if it hasn't been read since all
+    -- the ticket mail arrived (an hour after sales closed)
+    if not force and not Lottery.MailChecked(L) then
+        ns.UI.ShowInvite(("%s hasn't checked their mailbox since %s, so the tickets can't be checked against the gold: tickets nobody has seen gold for will be in the draw, and some paid tickets may be missing. Draw anyway?"):format(
+            ns.Short(L.pot), date("!%H:%M", Lottery.MailCheckDue(L) + Lottery.BRISBANE)), function() Lottery.Draw(true) end, function() end)
         return false
     end
     Lottery.drawing = true
@@ -956,13 +999,27 @@ function Lottery.Draw(force)
     return true
 end
 
+--- The tickets that go into the draw: { name = tickets }, total. Once the pot character's
+--- mailbox has proven it, claimed tickets with no gold behind them stay out (say = tell the drawer who).
+local function Snapshot(L, say)
+    local snapshot, total, out = {}, 0, {}
+    for _, e in ipairs(Lottery.Players(L)) do
+        local n = Lottery.DrawTickets(L, e.name)
+        if n > 0 then snapshot[e.name] = n total = total + n end
+        if e.n > n then out[#out + 1] = ("%s (%d)"):format(ns.Short(e.name), e.n - n) end
+    end
+    if say and #out > 0 then
+        ns.Log("|cffff8040Left out of the draw - %s's mailbox never got the gold for them:|r %s", ns.Short(L.pot),
+            table.concat(out, ", "))
+    end
+    return snapshot, total
+end
+
 --- Step 2 of the draw: freeze the tickets, shuffle the players and give out the numbers.
 --- Nothing changes after this: the roll, COUNTDOWN seconds later, is over exactly this list.
 function Lottery.Freeze(L)
     if L ~= Lottery.Current() or L.state ~= "open" then Lottery.drawing = false EndCountdown(L) Changed() return end
-    local snapshot = {}
-    local total = 0
-    for _, e in ipairs(Lottery.Players(L)) do snapshot[e.name] = e.n total = total + e.n end
+    local snapshot, total = Snapshot(L, true)
     if total == 0 then return Lottery.Roll(L, { snapshot = snapshot, order = {}, total = 0 }) end
     local list
     list, total = Lottery.Lineup(snapshot, Lottery.Shuffle(Names(snapshot)))
@@ -982,7 +1039,7 @@ function Lottery.Roll(L, frozen)
     if frozen then
         snapshot, order, total = frozen.snapshot, frozen.order, frozen.total
     else
-        for _, e in ipairs(Lottery.Players(L)) do snapshot[e.name] = e.n total = total + e.n end
+        snapshot, total = Snapshot(L)
     end
     if total == 0 then
         L.drawn = {}
@@ -1054,6 +1111,7 @@ end
 -- Buying tickets (mailing the pot character)
 ---------------------------------------------------------------------------
 Lottery.sending = nil -- { to, amount, n, id }
+local Unsure -- (below)
 
 local function Call(fn, ...)
     if type(fn) ~= "function" then return nil end
@@ -1086,11 +1144,15 @@ function Lottery.Buy(n)
     end
     Call(ClearSendMail)
     if Call(SetSendMailMoney, amount) == false then ns.Print("Couldn't put %s on the mail.", ns.Money(amount)) return false end
-    local job = { to = L.pot, amount = amount, n = n, id = L.id, had = mine, before = tonumber(Call(GetMoney)) }
+    Lottery.HookMail() -- (so another mail sent meanwhile is noticed)
+    local job = { to = L.pot, amount = amount, n = n, id = L.id, had = mine, before = tonumber(Call(GetMoney)),
+        postage = postage }
     Lottery.sending = job
+    Lottery.ownSend = true
     local ok, err = pcall(SendMail, L.pot, Lottery.SUBJECT .. L.id,
         ("%d GuildGambit lottery ticket%s (%s each) for the draw on %s."):format(n, n == 1 and "" or "s",
             ns.Money(L.price), Lottery.When(L.drawAt)))
+    Lottery.ownSend = false
     if not ok then
         Lottery.sending = nil
         ns.Print("Couldn't send the mail: %s", tostring(err))
@@ -1100,27 +1162,49 @@ function Lottery.Buy(n)
     C_Timer.After(Lottery.MAIL_WAIT, function()
         if Lottery.sending == job then ns.Print("Waiting for the game to confirm your ticket mail...") end
     end)
+    -- a "sent" much later can't be told apart from another mail's: stop claiming (the pot
+    -- character's mailbox still counts the tickets if the gold went)
+    C_Timer.After(Lottery.SEND_TIMEOUT, function()
+        if Lottery.sending ~= job then return end
+        Lottery.sending = nil
+        Unsure(job, "the game never confirmed it was sent")
+        Changed()
+    end)
     ns.Print("Mailing %s to %s - keep the mailbox open until your tickets are confirmed.", ns.Money(amount), ns.Short(L.pot))
     Changed()
     return true
 end
 
---- True once the ticket gold has left our bags.
+--- Has the ticket gold left our bags? "yes"; "no" (not yet); or "unsure": we can't read our gold,
+--- or more went than this mail costs (something else cost gold too, so it isn't proof).
 local function GoldLeft(job)
     local now = tonumber(Call(GetMoney))
-    if not job.before or not now then return true end -- (can't tell: trust the game's "sent")
-    return job.before - now >= job.amount
+    if not job.before or not now then return "unsure" end
+    local gone = job.before - now
+    if gone < job.amount then return "no" end
+    if gone > job.amount + (job.postage or 30) then return "unsure" end
+    return "yes"
 end
 
 local Claim
 
+--- No claim for a ticket mail we can't be sure of; the pot character's mailbox decides.
+Unsure = function(job, why)
+    ns.Log("|cffff8040Couldn't confirm your ticket mail|r (%s), so no tickets were claimed. If the %s left your bags, your tickets count once %s's mailbox gets it.",
+        why, ns.Money(job.amount), ns.Short(job.to))
+end
+
 --- MAIL_SEND_SUCCESS (from MailPay): true if it was our ticket mail. The tickets only count
---- once the gold has actually left our bags (a "sent" mail without the gold buys nothing).
+--- once the gold has actually left our bags (a "sent" mail without the gold buys nothing), and
+--- only if no other mail was sent meanwhile (its "sent" and its gold could be taken for ours).
 function Lottery.OnMailSent()
     local job = Lottery.sending
     if not job then return false end
     Lottery.sending = nil
-    if GoldLeft(job) then Claim(job) return true end
+    if job.other then Unsure(job, "another mail was sent at the same time") Changed() return true end
+    local left = GoldLeft(job)
+    if left == "yes" then Claim(job) return true end
+    if left == "unsure" then Unsure(job, "your gold changed by more than the ticket mail") Changed() return true end
     Lottery.confirming = job
     C_Timer.After(Lottery.MONEY_WAIT, function()
         if Lottery.confirming ~= job then return end
@@ -1136,10 +1220,20 @@ end
 --- PLAYER_MONEY: the gold for a sent ticket mail has left our bags.
 function Lottery.OnMoney()
     local job = Lottery.confirming
-    if job and GoldLeft(job) then
-        Lottery.confirming = nil
-        Claim(job)
-    end
+    if not job then return end
+    local left = job.other and "unsure" or GoldLeft(job)
+    if left == "no" then return end
+    Lottery.confirming = nil
+    if left == "yes" then Claim(job) return end
+    Unsure(job, job.other and "another mail was sent at the same time" or "your gold changed by more than the ticket mail")
+    Changed()
+end
+
+--- SendMail (hooked): a mail other than our ticket mail while it's unconfirmed.
+function Lottery.OnSendMail()
+    if Lottery.ownSend then return end
+    local job = Lottery.sending or Lottery.confirming
+    if job then job.other = true end
 end
 
 Claim = function(job)
@@ -1316,6 +1410,7 @@ end
 function Lottery.HookMail()
     if Lottery.hooked or not hooksecurefunc then return end
     Lottery.hooked = true
+    if SendMail then pcall(hooksecurefunc, "SendMail", function() Lottery.OnSendMail() end) end
     if TakeInboxMoney then pcall(hooksecurefunc, "TakeInboxMoney", Lottery.OnTakeMoney) end
     if AutoLootMailItem then pcall(hooksecurefunc, "AutoLootMailItem", Lottery.OnTakeMoney) end
 end
@@ -1380,8 +1475,9 @@ function Lottery.Remind()
             ns.Print("|cffffd100Lottery:|r yours isn't announced yet - click Announce on the lottery page to open ticket sales.")
         elseif not L.announced then
             -- not announced yet: nothing to remind anyone of
-        elseif ns.IsMe(L.pot) and now >= Lottery.SalesClose(L) and (L.potChecked or 0) < Lottery.SalesClose(L) then
-            ns.Print("|cffffd100Lottery:|r ticket sales have closed - open your mailbox so every paid ticket is counted before the draw.")
+        elseif ns.IsMe(L.pot) and now >= Lottery.SalesClose(L) and not Lottery.MailChecked(L) then
+            ns.Print("|cffffd100Lottery:|r ticket sales have closed - open your mailbox after %s (Brisbane time) so every ticket is checked against its gold before the draw.",
+                date("!%H:%M", Lottery.MailCheckDue(L) + Lottery.BRISBANE))
         elseif Lottery.SalesOpen(L) and ns.charDB.lotteryRemindDay ~= date("%Y%m%d") then
             ns.charDB.lotteryRemindDay = date("%Y%m%d")
             local _, pot = Lottery.Totals(L)

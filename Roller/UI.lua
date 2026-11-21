@@ -35,15 +35,17 @@ UI.Icon = Icon
 
 -- Sprites with a second walking frame (<name>_2).
 local ANIM = {}
-for _, n in ipairs({ "hero_dice", "slime", "slime_s", "imp", "goldimp", "bouncer", "soldier", "joker", "pickpocket", "enforcer", "mimic", "shark",
+for _, n in ipairs({ "hero", "slime", "slime_s", "imp", "goldimp", "bouncer", "soldier", "joker", "pickpocket", "enforcer", "mimic", "shark",
     "golem", "spinner", "croupier", "teller", "devil", "cat", "pig" }) do ANIM[n] = n .. "_2" end
 -- Shots that tumble as they fly.
+-- Shots that point the way they fly.
+local AIM = { bullet = true, knife = true }
 local SPIN = { die1 = 9, die2 = 9, die3 = 9, die4 = 9, die5 = 9, die6 = 9, tcoin = 12, tower = 5, horseshoe = 14, chip = 10, rball = 8 }
 
 -- Everything this file draws that isn't named in the content tables (the tests check the files exist).
 UI.SPRITES = { "disc", "circle", "square", "ring_thin", "glow", "shadow", "puff", "spark", "arrow_w", "vignette", "wall_h", "wall_v", "wall_corner",
     "torch", "vignette_w", "ui_bar", "ui_barfill", "ui_xp", "ui_plate", "ui_button", "ui_panel", "ui_card", "ui_cardglow", "eshot", "chip", "heart", "cardface",
-    "flip_h", "flip_t", "chest", "star" }
+    "flip_h", "flip_t", "chest", "crate", "star", "gun_f", "flame" }
 for _, n in pairs(ANIM) do UI.SPRITES[#UI.SPRITES + 1] = n end
 
 local SUIT_ICON = { S = "suit_s", H = "suit_h", D = "suit_d", C = "suit_c", J = "suit_j" }
@@ -277,6 +279,23 @@ local function DrawZones(g)
                     Spin(t, nil)
                     Place(t, g, z.x, z.y, 26)
                 end
+            elseif z.fire then
+                -- a fire of yours: flames, not a filled disc (red discs are the ones to stay out of)
+                local fade = min(1, z.dur / 0.5)
+                DrawCircle(g, z.x, z.y, z.r, 1, 0.75, 0.25, 0.4 * fade, "ring_thin")
+                Glow(g, z.x, z.y, z.r * 2.4, 1, 0.5, 0.1, 0.3 * fade)
+                for k = 0, 4 do
+                    local t = Take(ui.shotPool)
+                    if not t then break end
+                    local a = k * 2.513 + z.x * 0.01
+                    local d = k == 0 and 0 or z.r * 0.55
+                    SetSprite(t, "flame")
+                    t:SetVertexColor(1, 1, 1, fade)
+                    if (floor(g.clock * 7 + k) % 2) == 0 then t:SetTexCoord(0, 1, 0, 1) else t:SetTexCoord(1, 0, 0, 1) end
+                    Spin(t, nil)
+                    local size = z.r * (0.62 + 0.08 * sin(g.clock * 9 + k * 1.7))
+                    Place(t, g, z.x + cos(a) * d, z.y + sin(a) * d + size * 0.18, size)
+                end
             elseif z.r > 0 then
                 DrawCircle(g, z.x, z.y, z.r, 0.5, 0.75, 1, 0.2, "disc")
                 DrawCircle(g, z.x, z.y, z.r, 0.6, 0.85, 1, 0.5, "ring_thin")
@@ -384,37 +403,6 @@ local function DrawWalls(g)
     for i = n + 1, #w.torches do w.torches[i]:Hide() end
 end
 
--- An experiment, off unless switched on with "/gg roller models": bosses as the game's own 3D
--- creatures, drawn over their sprites (so a creature the client can't show costs nothing).
-local MODEL_NPC = { pit = 2496, dealer = 14823, snakes = 14507, fortune = 14822, house = 15990 }
-
-local function BossModel(g, e, size, i)
-    if not HR.DB().opts.models then return end
-    ui.models = ui.models or {}
-    local m = ui.models[i]
-    if m == nil then
-        local ok, made = pcall(CreateFrame, "PlayerModel", nil, ui.modelFrame)
-        m = ok and made or false
-        ui.models[i] = m
-    end
-    local id = MODEL_NPC[e.kind]
-    if not m or not id then return end
-    pcall(function()
-        if m._npc ~= id then
-            m._npc = id
-            m:ClearModel()
-            m:SetCreature(id)
-        end
-        m:SetFacing(e.x > g.pl.x and -0.5 or 0.5)
-        m:ClearAllPoints()
-        m:SetPoint("CENTER", ui.field, "BOTTOMLEFT", PX(g, e.x), PY(g, e.y))
-        m:SetSize(size * S * 1.5, size * S * 1.5)
-        m:SetAlpha(e.down and 0.35 or 1)
-        m:Show()
-        m._used = true
-    end)
-end
-
 local TRAIT_TINT = { shielded = { 0.7, 0.8, 1 }, splitting = { 0.8, 1, 0.7 }, lucky = { 0.6, 1, 0.6 }, magnetic = { 1, 0.9, 0.5 } }
 
 --- The second walking frame every third of a second, each creature out of step with the next.
@@ -444,6 +432,7 @@ local function DrawEnemies(g)
                 r, gg, b = c[1], c[2], c[3]
             end
             if (e.jinx or 0) > 0 then r, gg, b = r * 0.75, gg * 0.55, b end
+            if e.dots then gg, b = gg * 0.55, b * 0.55 end -- (bleeding or burning: reddened)
             if (e.stun or 0) > 0 and not e.boss then r, gg, b = r * 0.6, gg * 0.6, b * 0.75 end
             if e.ally then r, gg, b = 0.5, 1, 0.5 end
             if e.down then a = 0.35 elseif e.immune and e.boss then a = 0.85 end
@@ -478,7 +467,6 @@ local function DrawEnemies(g)
             end
             if e.boss and bars < 2 then
                 bars = bars + 1
-                BossModel(g, e, size, bars)
                 local bar = ui.bossBars[bars]
                 local frac = max(0, min(1, e.hp / e.maxhp))
                 bar.fill:SetWidth(max(1, BOSS_W * (e.down and 0 or frac)))
@@ -496,12 +484,6 @@ local function DrawEnemies(g)
         end
     end
     ui.bosses = bars
-    for _, m in pairs(ui.models or {}) do
-        if m then
-            if not m._used then pcall(m.Hide, m) end
-            m._used = nil
-        end
-    end
     for i = bars + 1, 2 do ui.bossBars[i]:Hide() end
     for i = small + 1, #ui.smallBars do ui.smallBars[i]:Hide() end
 end
@@ -519,6 +501,9 @@ local function DrawShots(g)
         if spin then
             t:SetTexCoord(0, 1, 0, 1)
             Spin(t, now * spin + i)
+        elseif AIM[name] then
+            t:SetTexCoord(0, 1, 0, 1)
+            Spin(t, math.atan2(s.vy or 0, s.vx or 1))
         else
             Spin(t, nil)
             if s.flip or (s.vx or 0) < 0 then t:SetTexCoord(1, 0, 0, 1) else t:SetTexCoord(0, 1, 0, 1) end
@@ -535,6 +520,9 @@ local function DrawShots(g)
                 if spin then
                     tr:SetTexCoord(0, 1, 0, 1)
                     Spin(tr, now * spin + i - k * 0.5)
+                elseif AIM[name] then
+                    tr:SetTexCoord(0, 1, 0, 1)
+                    Spin(tr, math.atan2(vy, vx))
                 else
                     Spin(tr, nil)
                     if s.flip or vx < 0 then tr:SetTexCoord(1, 0, 0, 1) else tr:SetTexCoord(0, 1, 0, 1) end
@@ -619,6 +607,10 @@ local function DrawPickups(g)
                 lift = 2 + sin(now * 3) * 2
                 if def.legendary then Glow(g, p.x, p.y, 58, 1, 0.55, 0.05, 0.75)
                 else Glow(g, p.x, p.y, 50, 0.4, 0.85, 1, 0.6) end
+            elseif kind == "crate" then
+                SetSprite(t, "crate")
+                size = 32 + sin(now * 4) * 1.5
+                Glow(g, p.x, p.y, 70, 1, 0.7, 0.25, 0.65 + 0.15 * sin(now * 6))
             elseif kind == "chest" then
                 SetSprite(t, "chest")
                 size = 30 + sin(now * 4) * 1.5
@@ -688,7 +680,7 @@ local function DrawArrows(g)
         t:Show()
     end
     for _, p in ipairs(g.pickups) do
-        if p.kind == "chest" then point(p.x, p.y, 1, 0.85, 0.2)
+        if p.kind == "chest" or p.kind == "crate" then point(p.x, p.y, 1, 0.85, 0.2)
         elseif p.kind == "power" then point(p.x, p.y, 0.4, 0.9, 1) end
     end
     if g.table then point(g.table.x, g.table.y, 0.3, 1, 0.4) end
@@ -736,22 +728,26 @@ end
 local function Clock(t) return ("%d:%02d"):format(floor(t / 60), floor(t % 60)) end
 
 local function HandLine(g)
-    if g.class == "cards" then
-        local parts = {}
-        for _, c in ipairs(g.hand) do
-            parts[#parts + 1] = c.joker and "|cffe080ff*|r" or (("|c%s%s|r"):format(HR.SUIT_COLOR[c.s], HR.CardText(c)) .. SuitText(c.s))
-        end
-        return ("Hand: %s   |cffaaaaaa%s|r"):format(#parts > 0 and table.concat(parts, " ") or "-", HR.HandText(g.hand))
-    elseif g.class == "coin" then
-        local c = g.coin
-        return ("%s  %s   streak |cffffd100%d|r   coin %d%% your way"):format(Icon(c.side == "H" and "flip_h" or "flip_t", 16),
-            c.side == "H" and "|cffffd100HEADS|r (damage)" or "|cff80c0ffTAILS|r (defense)", c.streak, floor(HR.FlipOdds(g) * 100 + 0.5))
-    else
+    local parts = {}
+    if HR.FindWeapon(g, "bonedice") then
         local held = {}
         for _, f in ipairs(g.heldDice) do held[#held + 1] = Icon("die" .. f, 16) end
-        return ("Held dice: %s   doubles |cffffd100%d%%|r%s"):format(#held > 0 and table.concat(held, " ") or "-",
+        parts[#parts + 1] = ("Held dice: %s   doubles |cffffd100%d%%|r%s"):format(#held > 0 and table.concat(held, " ") or "-",
             floor(HR.DoublesChance(g) * 100 + 0.5), (g.diceChain or 0) > 0 and ("   chain x" .. g.diceChain) or "")
     end
+    if HR.FindWeapon(g, "flick") then
+        local cards = {}
+        for _, c in ipairs(g.hand) do
+            cards[#cards + 1] = c.joker and "|cffe080ff*|r" or (("|c%s%s|r"):format(HR.SUIT_COLOR[c.s], HR.CardText(c)) .. SuitText(c.s))
+        end
+        parts[#parts + 1] = ("Hand: %s   |cffaaaaaa%s|r"):format(#cards > 0 and table.concat(cards, " ") or "-", HR.HandText(g.hand))
+    end
+    local c = g.coin
+    if c and HR.FindWeapon(g, "trickcoin") then
+        parts[#parts + 1] = ("%s  %s   streak |cffffd100%d|r   coin %d%% your way"):format(Icon(c.side == "H" and "flip_h" or "flip_t", 16),
+            c.side == "H" and "|cffffd100HEADS|r (damage)" or "|cff80c0ffTAILS|r (defense)", c.streak, floor(HR.FlipOdds(g) * 100 + 0.5))
+    end
+    return table.concat(parts, "      ")
 end
 
 local function DrawHud(g)
@@ -836,12 +832,12 @@ function UI.Render()
     ui.hudFrame:SetShown(g ~= nil)
     ui.wallFrame:SetShown(g ~= nil)
     if not g then
-        for _, m in pairs(ui.models or {}) do if m then pcall(m.Hide, m) end end
         -- no run: the first room's floor, dimmed, behind the menu
         ui.ox, ui.oy = 0, 0
         PlaceFloor("floor_dice", 0, 0)
         for _, name in ipairs(POOLS) do Finish(ui[name]) end
         ui.player:Hide()
+        ui.gun:Hide()
         ui.shield:Hide()
         ui.flash:Hide()
         ui.hurtEdge:Hide()
@@ -880,6 +876,21 @@ function UI.Render()
     Place(ui.player, g, pl.x, pl.y + (moving and max(0, bob) * 2 or 0), size * (1 - 0.03 * bob), size * (1 + 0.05 * bob))
     local alive = g.phase ~= "over" or (g.summary and g.summary.how ~= "dead")
     ui.player:SetShown(alive)
+    -- the gun in his hand: it swings round him to point where it shoots
+    local aim = alive and HR.FindWeapon(g, "revolver") and pl.aim
+    if aim then
+        local have = ui.gunAim or aim
+        local d = (aim - have + math.pi) % (2 * math.pi) - math.pi
+        have = have + d * 0.35
+        ui.gunAim = have
+        -- (two paintings, so the grip hangs down whichever way it points)
+        SetSprite(ui.gun, cos(have) >= 0 and "revolver" or "gun_f")
+        ui.gun:SetTexCoord(0, 1, 0, 1)
+        Spin(ui.gun, have)
+        ui.gun:SetAlpha(ui.player:GetAlpha())
+        Place(ui.gun, g, pl.x + cos(have) * HR.GUN_HOLD, pl.y + sin(have) * HR.GUN_HOLD - 2, 17 * K)
+    end
+    ui.gun:SetShown(aim ~= nil and aim ~= false)
     if alive then
         Shadow(g, pl.x, pl.y, size)
         -- you carry a little light of your own
@@ -1058,12 +1069,12 @@ function UI.Pick(key)
 end
 
 ---------------------------------------------------------------------------
--- The main menu: play, a list of classes, talents, mode, records
+-- The main menu: play, talents, mode, records
 ---------------------------------------------------------------------------
-local function BestsLine(db, class)
+local function BestsLine(db)
     local key = db.mode .. ":" .. db.stakes
-    local b = db.bests[key] and db.bests[key][class]
-    if not b or (b.runs or 0) == 0 then return "No runs yet with this class." end
+    local b = db.bests[key] and db.bests[key].all
+    if not b or (b.runs or 0) == 0 then return "No runs yet." end
     return ("Best |cffffd100%d|r   furthest: room %d, %d boss%s%s"):format(b.score or 0, b.room or 1, b.bosses or 0, (b.bosses or 0) == 1 and "" or "es",
         b.fastest and ("   fastest win " .. Clock(b.fastest)) or "")
 end
@@ -1071,17 +1082,11 @@ end
 function UI.Lobby()
     local db = HR.DB()
     ui.g = nil
-    local class = HR.CLASS[db.class] or HR.CLASSES[1]
-    if class.soon then
-        class = HR.CLASSES[1]
-        db.class = class.id
-    end
-    local open = HR.ClassUnlocked(class.id)
     if HR.Feature("rules") and not ui.rule then
         ui.rule, ui.redraws = HR.RULES[math.random(1, #HR.RULES)].id, 1
     end
     local rule = HR.RULE[ui.rule or "none"]
-    local lines = { "|cffaaaaaaA casual arcade game. Chips are points - no gold, ever.|r", BestsLine(db, class.id) }
+    local lines = { "|cffaaaaaaA casual arcade game. Chips are points - no gold, ever.|r", BestsLine(db) }
     if HR.Feature("rules") then lines[#lines + 1] = ("House Rule: |cffffd100%s|r - %s"):format(rule.name, rule.desc) end
     local m = { kind = "lobby", title = "High Roller", sub = table.concat(lines, "\n"), subLines = #lines, options = {} }
     local n = 0
@@ -1096,32 +1101,16 @@ function UI.Lobby()
         add({ key = "E", title = "Continue your run", desc = ("Back at the start of room %d, as you entered it."):format(db.save.roomPos or 1), medium = true,
             pick = function() UI.StartRun(nil, true) end })
     else
-        add({ key = "E", title = "Play as " .. class.name, medium = true, enabled = open,
-            desc = open and "WASD or the arrow keys to move. Your weapons fire on their own." or class.needText,
+        add({ key = "E", title = "Play", medium = true, icon = "hero",
+            desc = "WASD or the arrow keys to move. Your gun fires on its own; pick up the rest.",
             pick = function() UI.StartRun() end })
     end
-    -- the classes, as a list: pick one with its number. Classes still to come show as "??".
-    for _, c in ipairs(HR.CLASSES) do
-        if c.soon then
-            add({ title = "??", medium = true, enabled = false, sub = "|cff888888a new class, coming later|r", desc = "More classes are on the way.",
-                pick = function() end })
-        else
-        local unlocked = HR.ClassUnlocked(c.id)
-        local cdb = HR.ClassDB(c.id)
-        local free = HR.TalentPoints(c.id) - HR.TalentsSpent(c.id)
-        add({ title = c.name, icon = c.sprite, medium = true, selected = c.id == db.class, suit = c.suit,
-            sub = unlocked and (("level %d"):format(cdb.level) .. (free > 0 and ("  |cff20ff20%d talent point%s|r"):format(free, free == 1 and "" or "s") or ""))
-                or "|cffff8040locked|r",
-            desc = unlocked and c.blurb or c.needText,
-            pick = function()
-                db.class = c.id
-                UI.Lobby()
-            end })
-        end
-    end
-    add({ title = "Talents", desc = "Permanent upgrades for " .. class.name .. ".", small = true, enabled = open, pick = function() UI.ShowTalents(true) end })
+    local cdb = HR.ClassDB(HR.HERO)
+    local free = HR.TalentPoints(HR.HERO) - HR.TalentsSpent(HR.HERO)
+    add({ title = "Talents", small = true, pick = function() UI.ShowTalents(true) end,
+        desc = ("Permanent upgrades. Level %d%s"):format(cdb.level, free > 0 and ("  |cff20ff20%d point%s to spend|r"):format(free, free == 1 and "" or "s") or "") })
     if db.save then
-        add({ title = "New run", desc = "Abandons the saved run.", small = true, enabled = open, pick = function() UI.StartRun() end })
+        add({ title = "New run", desc = "Abandons the saved run.", small = true, pick = function() UI.StartRun() end })
     end
     if HR.Feature("quick") then
         add({ title = "Mode: " .. (db.mode == "quick" and "Quick Hand (3 rooms)" or "Full Table (5 rooms)"), desc = "Change the length of a run.", small = true,
@@ -1151,8 +1140,8 @@ function UI.Records()
         db.stakes, db.stats.runs or 0, db.stats.won or 0, db.stats.walked or 0, db.stats.died or 0) }
     for _, who in ipairs({ "all", "dice", "cards", "coin" }) do
         local b = db.bests[key] and db.bests[key][who]
-        if b and (b.runs or 0) > 0 and (who == "all" or not HR.CLASS[who].soon) then
-            lines[#lines + 1] = ("|cffffd100%s|r  best %d, room %d, %d bosses%s%s"):format(who == "all" and "Overall" or HR.CLASS[who].name, b.score or 0,
+        if b and (b.runs or 0) > 0 and who == "all" then
+            lines[#lines + 1] = ("|cffffd100%s|r  best %d, room %d, %d bosses%s%s"):format("Overall", b.score or 0,
                 b.room or 1, b.bosses or 0, b.fastest and (", win in " .. Clock(b.fastest)) or "", (b.heat or 0) > 0 and (", Heat " .. b.heat) or "")
             if who == "all" then
                 local extra = {}
@@ -1178,7 +1167,7 @@ function UI.Records()
     table.sort(found)
     lines[#lines + 1] = ("|cffffd100Builds found|r  %d of %d%s"):format(#found, #HR.BUILDS, #found > 0 and (": " .. table.concat(found, ", ")) or "")
     ui.menu = { kind = "records", title = "Records", sub = table.concat(lines, "\n"), subLines = #lines + 2, options = {
-        { key = "E", title = "Main menu", medium = true, desc = "Back to the class list.", pick = function() UI.Lobby() end } } }
+        { key = "E", title = "Main menu", medium = true, desc = "Back to the start.", pick = function() UI.Lobby() end } } }
     UI.AfterChange()
 end
 
@@ -1239,7 +1228,7 @@ local function Summary(g)
     local lines = {
         ("Score |cffffd100%d|r      room %d, %d boss%s      %s      level %d, %d kills"):format(s.score, s.room, s.bosses, s.bosses == 1 and "" or "es",
             Clock(s.time), s.level, s.kills),
-        ("%s +%d experience%s"):format(HR.CLASS[g.class].name, s.xp, s.levels > 0 and ("  |cff20ff20+" .. s.levels .. " talent point" .. (s.levels == 1 and "" or "s") .. "!|r") or ""),
+        ("+%d experience%s"):format(s.xp, s.levels > 0 and ("  |cff20ff20+" .. s.levels .. " talent point" .. (s.levels == 1 and "" or "s") .. "!|r") or ""),
     }
     for i, n in ipairs(s.new) do
         if i <= 4 then lines[#lines + 1] = "|cff20ff20" .. n .. "|r" end
@@ -1256,8 +1245,8 @@ local function Summary(g)
     if #parts > 0 then lines[#lines + 1] = "|cffaaaaaaDamage: " .. table.concat(parts, ", ") .. "|r" end
     lines[#lines + 1] = "|cffaaaaaa" .. s.build.hand .. "|r"
     ui.menu = { kind = "summary", title = HOW[s.how], sub = table.concat(lines, "\n"), subLines = #lines + 1, options = {
-        { key = "E", title = "Play again", medium = true, desc = "The same class, a new run.", pick = function() UI.StartRun() end },
-        { key = "0", title = "Main menu", medium = true, desc = "Classes, talents and records.", pick = function() UI.Lobby() end },
+        { key = "E", title = "Play again", medium = true, desc = "A new run.", pick = function() UI.StartRun() end },
+        { key = "0", title = "Main menu", medium = true, desc = "Talents and records.", pick = function() UI.Lobby() end },
     } }
     ui.rule, ui.redraws = nil, nil
 end
@@ -1269,7 +1258,7 @@ function UI.StartRun(opts, continue)
     if continue and db.save then g = HR.Restore(db.save) end
     if not g then
         opts = opts or {}
-        opts.class, opts.mode, opts.stakes = opts.class or db.class, opts.mode or db.mode, opts.stakes or db.stakes
+        opts.mode, opts.stakes = opts.mode or db.mode, opts.stakes or db.stakes
         opts.rule = opts.rule or ui.rule
         g = HR.NewRun(opts)
     end
@@ -1305,7 +1294,7 @@ function UI.ShowTalents(show)
     local trees = HR.TALENTS[id]
     local cdb = HR.ClassDB(id)
     local free = HR.TalentPoints(id) - HR.TalentsSpent(id)
-    t.head:SetText(("|cffffd100%s talents|r   level %d   |cff20ff20%d|r point%s to spend  (of %d earned; %d at most)"):format(HR.CLASS[id].name,
+    t.head:SetText(("|cffffd100Talents|r   level %d   |cff20ff20%d|r point%s to spend  (of %d earned; %d at most)"):format(
         cdb.level, free, free == 1 and "" or "s", HR.TalentPoints(id), HR.TALENT_CAP))
     for ti = 1, 3 do
         local tree = trees[ti]
@@ -1388,7 +1377,7 @@ local function BuildTalents(canvas)
     reset:SetScript("OnClick", function() HR.ResetTalents(HR.DB().class) UI.ShowTalents(true) end)
     t.note = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     t.note:SetPoint("BOTTOM", 0, 26)
-    t.note:SetText("|cffaaaaaaA row opens for every 3 points in its tree. Hover a tree's name to see what it does.|r")
+    t.note:SetText("|cffaaaaaaFill a talent to open the one below it. Hover a tree's name to see what it does.|r")
     t.back, t.reset = back, reset
     t:Hide()
     return t
@@ -1579,10 +1568,11 @@ local function BuildRoom(canvas)
     ui.trailPool = Pool(mid, "BORDER", 160)
     ui.enemyPool = Pool(mid, "ARTWORK", HR.CAPS.enemies + 16)
     ui.shotPool = Pool(mid, "OVERLAY", HR.CAPS.shots + HR.CAPS.eshots + 24)
-    ui.modelFrame = Layer(canvas, 5)
     local top = Layer(canvas, 6)
     ui.fxPool = Pool(top, "BORDER", HR.CAPS.fx)
     ui.player = top:CreateTexture(nil, "ARTWORK")
+    ui.gun = top:CreateTexture(nil, "OVERLAY")
+    SetSprite(ui.gun, "revolver")
     ui.shield = top:CreateTexture(nil, "BORDER")
     SetSprite(ui.shield, "ring_thin")
     ui.arrows = {}
@@ -1950,9 +1940,9 @@ end
 --- The Arcade tab's page for the game: how to play, in five pictures, and a button that opens
 --- its window.
 local TUTORIAL = {
-    { head = "Just walk", text = "Move with |cffffd100W A S D|r. That's the only control: your dice throw themselves.", pic = "move" },
+    { head = "Just walk", text = "Move with |cffffd100W A S D|r. That's the only control: your gun fires itself.", pic = "move" },
     { head = "Stay out of the red", text = "Red on the floor is about to hit. Step out before it fills in. |cffff6a5aA boss's red kills in one hit.|r", pic = "red" },
-    { head = "Walk over the loot", text = "|cffffd100Chips|r are your score. Dice, chests and power-ups make you stronger.", pic = "loot" },
+    { head = "Walk over the loot", text = "|cffffd100Chips|r are your score. A |cffffd100crate|r is a new weapon; chests and power-ups make you stronger.", pic = "loot" },
     { head = "Level up, pick a card", text = "The game pauses and deals three cards. Press |cffffd1001|r, |cffffd1002|r or |cffffd1003|r for a new weapon or an upgrade.", pic = "cards" },
     { head = "A boss every 2 minutes", tall = true, pic = "boss",
       text = "Beat it and take a relic. Then choose: |cffffd100go on|r to the next room, or |cffffd100walk away|r and keep your chips.\n|cffff6a5aDie and you keep nothing.|r" },
@@ -1991,22 +1981,22 @@ local function TutorialPicture(pic, kind, h)
             fs:SetPoint("CENTER", cap, "CENTER", 0, 0)
             fs:SetText("|cff221a10" .. k[1] .. "|r")
         end
-        sprite("hero_dice", 100, 34, 52)
+        sprite("hero", 100, 34, 52)
         sprite("arrow_w", 130, 36, 14, "OVERLAY")
     elseif kind == "red" then
         tint(sprite("disc", 36, 34, 56, "BORDER"), 1, 0.13, 0.08, 0.8)
         tint(sprite("disc", 36, 34, 30, "BORDER"), 1, 0.3, 0.18, 0.9)
         tint(sprite("ring_thin", 36, 34, 56), 1, 0.5, 0.38, 1)
         sprite("arrow_w", 76, 36, 14, "OVERLAY")
-        sprite("hero_dice", 108, 34, 50)
+        sprite("hero", 108, 34, 50)
     elseif kind == "loot" then
         sprite("chip", 18, 48, 24)
         sprite("chip", 34, 22, 20)
-        sprite("die6", 62, 46, 30)
+        sprite("crate", 62, 44, 34)
         sprite("chest", 98, 24, 40)
         sprite("pu_boots", 120, 52, 32)
     elseif kind == "cards" then
-        for i, icon in ipairs({ "die6", "ball8", "horseshoe" }) do
+        for i, icon in ipairs({ "revolver", "ball8", "die6" }) do
             local x = 26 + (i - 1) * 44
             local card = pic:CreateTexture(nil, "BORDER")
             card:SetTexture(Tex("ui_card"))

@@ -72,13 +72,6 @@ commands.deathroll = commands.dr
 commands.arcade = function() ns.UI.SetShown(true) ns.UI.SelectTab("arcade") end
 commands.kodo = commands.arcade
 commands.roller = function(arg)
-    if arg == "models" then
-        -- an experiment: bosses as the game's own 3D creatures
-        local opts = ns.Roller.DB().opts
-        opts.models = not opts.models or nil
-        ns.Print("High Roller: 3D boss models %s (an experiment - they may not show for every boss).", opts.models and "on" or "off")
-        return
-    end
     -- (the game has a window of its own; the Arcade tab remembers it was the last one played)
     ns.db.arcadeGame = "roller"
     if ns.UI.ArcadeGame then ns.UI.ArcadeGame("roller") end

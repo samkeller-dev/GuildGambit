@@ -9,21 +9,78 @@ local dist, clamp = HR.dist, HR.clamp
 local function V(w, f) return HR.WVal(w, f) end
 
 ---------------------------------------------------------------------------
--- Dicemaster: Bone Dice
+-- The revolver you start with
+---------------------------------------------------------------------------
+-- He holds it out at arm's length and it swings round him to point at what it shoots
+-- (pl.aim, which the UI draws it by). Bullets leave from the muzzle, not from his middle.
+HR.GUN_HOLD, HR.GUN_REACH, HR.GUN_BARREL = 15, 22, 3
+
+--- Where the muzzle is for an aim angle: x, y.
+function HR.Muzzle(g, a, reach)
+    local pl = g.pl
+    local side = cos(a) >= 0 and 1 or -1 -- (the barrel is the top edge of the gun, whichever way it points)
+    reach = reach or HR.GUN_REACH
+    return pl.x + cos(a) * reach - sin(a) * HR.GUN_BARREL * side, pl.y + sin(a) * reach + cos(a) * HR.GUN_BARREL * side
+end
+
+local function Volley(g, w, mult)
+    local pl = g.pl
+    local target = HR.Nearest(g, pl.x, pl.y)
+    if not target then return false end
+    local a = atan2(target.y - pl.y, target.x - pl.x)
+    pl.aim = a
+    -- (something right on top of him is shot from the hip, or the bullet would start past it)
+    local room = dist(pl.x, pl.y, target.x, target.y) - (target.r or 0)
+    local mx, my = pl.x, pl.y
+    if room > HR.GUN_REACH then mx, my = HR.Muzzle(g, a) end
+    local n = V(w, "n")
+    for i = 1, n do
+        local b = a + (i - (n + 1) / 2) * 0.13
+        HR.Shoot(g, { x = mx, y = my, vx = cos(b) * 310, vy = sin(b) * 310, speed = 310, dmg = V(w, "dmg") * mult, wid = "revolver",
+            sprite = "bullet", pierce = V(w, "pierce"), size = 13 })
+    end
+    return true
+end
+
+FIRE.revolver = function(g, w, mult)
+    if not Volley(g, w, mult) then
+        w.cd = 0.2
+        return
+    end
+    -- Tommy Gun: two more volleys right behind the first, at 40% strength each
+    if w.evo then w.burst, w.burstT, w.burstMult = 2, 0.09, mult * 0.4 end
+end
+
+WSTEP.revolver = function(g, w, dt)
+    -- the gun follows the nearest enemy between shots
+    local pl = g.pl
+    local t = HR.Nearest(g, pl.x, pl.y)
+    if t then pl.aim = atan2(t.y - pl.y, t.x - pl.x) end
+    if (w.burst or 0) > 0 then
+        w.burstT = (w.burstT or 0) - dt
+        if w.burstT <= 0 then
+            w.burst, w.burstT = w.burst - 1, 0.09
+            Volley(g, w, w.burstMult or 1)
+        end
+    end
+end
+
+---------------------------------------------------------------------------
+-- Bone Dice
 ---------------------------------------------------------------------------
 local function FloorDie(g, s)
-    if g.class ~= "dice" or s.noFloor then return end
+    if s.noFloor then return end
     local n = 0
     for _, p in ipairs(g.pickups) do if p.kind == "die" then n = n + 1 end end
     if n >= 6 then return end
-    HR.DropPickup(g, { kind = "die", x = s.x, y = s.y, face = s.face, life = 4 + 2 * HR.T(g, "dr3") })
+    HR.DropPickup(g, { kind = "die", x = s.x, y = s.y, face = s.face, life = 5 })
 end
 
 local function ThrowDie(g, w, face, target, mult, spread, extra)
     local pl = g.pl
     local s = { dmg = face * V(w, "dmg") * mult, wid = "bonedice", exact = true, face = face, sprite = "die" .. face,
-        bounce = V(w, "bounce"), canBounce = true, seekAll = HR.T(g, "dr2") > 0,
-        perBounce = 0.08 * HR.T(g, "dr4") + (HR.CharmMax(g, "marbles") and 0.1 or 0), maxRoll = face == 6, onEnd = FloorDie }
+        bounce = V(w, "bounce"), canBounce = true,
+        perBounce = HR.CharmMax(g, "marbles") and 0.1 or 0, maxRoll = face == 6, onEnd = FloorDie }
     if extra then for k, v in pairs(extra) do s[k] = v end end
     -- Natural Roller: a six explodes and is rolled again
     if w.evo and face == 6 then
@@ -33,15 +90,6 @@ local function ThrowDie(g, w, face, target, mult, spread, extra)
                 local f2 = HR.RollDie(gg)
                 ThrowDie(gg, w, f2, HR.Nearest(gg, e.x, e.y, shot.seen), mult, 0,
                     { x0 = e.x, y0 = e.y, rerolls = (shot.rerolls or 0) + 1, noFloor = true })
-            end
-        end
-    end
-    -- Avalanche: splits in two on the last bounce
-    if HR.T(g, "dr5") > 0 and not (extra and extra.child) then
-        s.onLast = function(gg, shot)
-            local e = HR.Nearest(gg, shot.x, shot.y, shot.seen, 160)
-            if e then
-                ThrowDie(gg, w, shot.face, e, mult * 0.6, 0, { x0 = shot.x, y0 = shot.y, child = true, noFloor = true, bounce = 0, canBounce = false })
             end
         end
     end
@@ -57,21 +105,14 @@ FIRE.bonedice = function(g, w, mult)
     end
     local faces, kind = HR.ThrowDice(g, V(w, "n"), g.heldDice)
     g.heldDice = {}
-    local bonus = 1
-    if kind == "double" or kind == "triple" then bonus = 1 + 0.15 * HR.T(g, "dl2") end
     if kind == "snake" then
         if HR.Relic(g, "martingale") then g.mgHit = true end
-        if HR.T(g, "dl4") > 0 then
-            HR.Blast(g, pl.x, pl.y, 44 * g.st.area, 8 * V(w, "dmg") * mult, "bonedice")
-            HR.Text(g, pl.x, pl.y + 20, "Snake eyes - boom", "ffff8040")
-        else
-            HR.Text(g, pl.x, pl.y + 20, "Snake eyes", "ffaaaaaa")
-        end
+        HR.Text(g, pl.x, pl.y + 20, "Snake eyes", "ffaaaaaa")
         g.diceChain = 0
         return
     end
     for i, f in ipairs(faces) do
-        ThrowDie(g, w, f, target, mult * bonus, (i - (#faces + 1) / 2) * 0.16)
+        ThrowDie(g, w, f, target, mult, (i - (#faces + 1) / 2) * 0.16)
     end
     if kind == "triple" then
         HR.Blast(g, target.x, target.y, 70 * g.st.area, faces[1] * V(w, "dmg") * 4 * mult, "bonedice", { exact = true })
@@ -81,14 +122,14 @@ FIRE.bonedice = function(g, w, mult)
         if faces[1] == 6 then HR.Taunt(g, "jackpot") end
     end
     local chains = kind == "double" or (kind == "triple" and HR.CharmMax(g, "shaved"))
-    local cap = V(w, "chain") + HR.T(g, "dl3")
+    local cap = V(w, "chain")
     if chains and (g.diceChain or 0) < cap and mult >= 1 then
         g.diceChain = (g.diceChain or 0) + 1
         g.bestChain = max(g.bestChain or 0, g.diceChain)
         HR.Text(g, pl.x, pl.y + 20, kind == "double" and ("Doubles! x" .. g.diceChain) or "Again!", "ffffd100")
         HR.Event(g, "roll")
-        -- a free throw, a moment later (double sixes with Sixes Wild: two)
-        g.freeThrows = (g.freeThrows or 0) + ((faces[1] == 6 and faces[2] == 6 and HR.T(g, "dl5") > 0) and 2 or 1)
+        -- a free throw, a moment later
+        g.freeThrows = (g.freeThrows or 0) + 1
         g.freeT = 0.28
     elseif not chains then
         g.diceChain = 0
@@ -107,7 +148,7 @@ WSTEP.bonedice = function(g, w, dt)
 end
 
 ---------------------------------------------------------------------------
--- Card Sharp: Flick
+-- Flick
 ---------------------------------------------------------------------------
 FIRE.flick = function(g, w, mult)
     local pl = g.pl
@@ -117,16 +158,14 @@ FIRE.flick = function(g, w, mult)
         return
     end
     local n = V(w, "n")
-    local slow = HR.T(g, "cs2")
     for i = 1, n do
-        HR.ShootAt(g, pl.x, pl.y, target, 230, { dmg = V(w, "dmg") * mult, wid = "flick", sprite = "card", pierce = V(w, "pierce"),
-            onHit = slow > 0 and function(gg, s, e) if not e.boss then e.slow = max(e.slow or 0, 0.75 * slow) end end or nil },
+        HR.ShootAt(g, pl.x, pl.y, target, 230, { dmg = V(w, "dmg") * mult, wid = "flick", sprite = "card", pierce = V(w, "pierce") },
             (i - (n + 1) / 2) * 0.2)
     end
 end
 
 ---------------------------------------------------------------------------
--- Coin Flipper: Trick Coin
+-- Trick Coin
 ---------------------------------------------------------------------------
 FIRE.trickcoin = function(g, w, mult)
     local pl, c = g.pl, g.coin
@@ -136,20 +175,18 @@ FIRE.trickcoin = function(g, w, mult)
         return
     end
     local heads = c and c.side == "H"
-    local boom = (heads and c.streak >= 5) and HR.T(g, "oh4") or 0
     local skip = {}
     for i = 1, V(w, "n") do
         local t = HR.Nearest(g, pl.x, pl.y, skip) or target
         skip[t] = true
         HR.ShootAt(g, pl.x, pl.y, t, 240, { dmg = V(w, "dmg") * mult, wid = "trickcoin", sprite = "tcoin", canBounce = true,
-            bounce = V(w, "bounce") + (heads and (1 + HR.T(g, "oh2")) or 0),
-            perBounce = HR.CharmMax(g, "marbles") and 0.1 or 0,
-            onHit = boom > 0 and function(gg, s, e) HR.Blast(gg, e.x, e.y, (15 + 15 * boom) * gg.st.area, s.dmg * 0.5, "trickcoin", { quiet = true }) end or nil })
+            bounce = V(w, "bounce") + (heads and 1 or 0),
+            perBounce = HR.CharmMax(g, "marbles") and 0.1 or 0 })
     end
 end
 
 ---------------------------------------------------------------------------
--- Orbiting weapons (8-Ball, Lucky Clover, the Coin Flipper's Tails coins)
+-- Orbiting weapons (8-Ball, Lucky Clover, the Trick Coin's Tails coins)
 ---------------------------------------------------------------------------
 local function Orbit(g, key, n, radius, speed, dt, onTouch, block)
     local pl = g.pl
@@ -223,7 +260,7 @@ WSTEP.trickcoin = function(g, w, dt)
         Orbit(g, "tails", 2, 24, 4, dt, function(e)
             e.oh.tails = g.time + 0.5
             HR.Hit(g, e, dmg, "trickcoin")
-        end, HR.T(g, "ot2") > 0 and function() end or nil)
+        end)
     elseif g.orbit and g.orbit.tails then
         g.orbit.tails = nil
     end
@@ -274,14 +311,18 @@ end
 -- Clubs
 ---------------------------------------------------------------------------
 FIRE.cat = function(g, w, mult)
+    -- each cat springs at a different enemy near you, then leaps on from one to the next
     local pl = g.pl
-    for i = 1, V(w, "n") do
-        local fromLeft = g.rand.chance(0.5)
-        local y = pl.y + g.rand.i(-90, 90)
-        HR.Shoot(g, { x = fromLeft and (g.camX - 10) or (g.camX + HR.VIEW_W + 10), y = y, vx = fromLeft and 230 or -230, vy = 0,
-            dmg = V(w, "dmg") * mult, wid = "cat", sprite = "cat", pierce = 99, r = 12, size = 22, life = 2.2, flip = not fromLeft,
+    local skip, any = {}, false
+    for _ = 1, V(w, "n") do
+        local t = HR.Nearest(g, pl.x, pl.y, skip, 320)
+        if not t then break end
+        skip[t], any = true, true
+        HR.ShootAt(g, pl.x, pl.y, t, 300, { dmg = V(w, "dmg") * mult, wid = "cat", sprite = "cat", r = 10, size = 22, life = 1.6,
+            canBounce = true, bounce = V(w, "pounce"), perBounce = HR.CharmMax(g, "marbles") and 0.1 or 0,
             onHit = function(gg, s, e) HR.Jinx(gg, e) end })
     end
+    if not any then w.cd = 0.3 end
 end
 
 FIRE.rball = function(g, w, mult)
@@ -404,6 +445,91 @@ FIRE.shoe = function(g, w, mult)
                 end
             end or nil }, (i - (V(w, "n") + 1) / 2) * 0.35)
     end
+end
+
+---------------------------------------------------------------------------
+-- Damage over time: bleeds and burns. Each weapon keeps its own stacks on an enemy.
+---------------------------------------------------------------------------
+HR.DOT_EVERY = 0.5
+
+--- Adds a stack of `dps` from weapon wid to e (up to cap stacks) and restarts its clock.
+function HR.Dot(g, e, wid, dps, secs, cap, stacks)
+    if e.dead or e.obj or e.immune or e.untarget then return end
+    e.dots = e.dots or {}
+    local d = e.dots[wid]
+    if not d then
+        d = { n = 0 }
+        e.dots[wid] = d
+    end
+    d.n = min(cap or 1, d.n + (stacks or 1))
+    d.dps, d.till = dps, g.time + secs
+end
+
+--- Every half second each stack does its damage (never a crit; it's the weapon's damage in the tally).
+function HR.StepDots(g, dt)
+    g.dotT = (g.dotT or HR.DOT_EVERY) - dt
+    if g.dotT > 0 then return end
+    g.dotT = HR.DOT_EVERY
+    local list = g.enemies
+    for i = #list, 1, -1 do
+        local e = list[i]
+        if g.enemies ~= list then return end -- (a kill ended the fight and cleared the room)
+        if e and e.dots and not e.dead then
+            for wid, d in pairs(e.dots) do
+                if d.till <= g.time then
+                    e.dots[wid] = nil
+                else
+                    HR.Hit(g, e, d.dps * d.n * HR.DOT_EVERY, wid, { exact = true, noLucky = true })
+                    if e.dead or g.enemies ~= list then break end
+                end
+            end
+            if not e.dead and next(e.dots) == nil then e.dots = nil end
+        end
+    end
+end
+
+--- Called when an enemy dies. Bloodbath: a bleeding one passes its bleed to three more.
+function HR.DotDeath(g, e)
+    local d = e.dots and e.dots.blade
+    local w = d and d.till > g.time and HR.FindWeapon(g, "blade")
+    if not (w and w.evo) then return end
+    local skip = { [e] = true }
+    for _ = 1, 3 do
+        local o = HR.Nearest(g, e.x, e.y, skip, 90)
+        if not o then break end
+        skip[o] = true
+        HR.Dot(g, o, "blade", d.dps, 4, V(w, "stacks"), d.n)
+    end
+end
+
+FIRE.blade = function(g, w, mult)
+    local pl = g.pl
+    local skip, any = {}, false
+    local dps, cap = V(w, "bleed") * mult, V(w, "stacks")
+    for _ = 1, V(w, "n") do
+        local t = HR.Nearest(g, pl.x, pl.y, skip)
+        if not t then break end
+        skip[t], any = true, true
+        HR.ShootAt(g, pl.x, pl.y, t, 280, { dmg = V(w, "dmg") * mult, wid = "blade", sprite = "knife", size = 15,
+            onHit = function(gg, s, e) HR.Dot(gg, e, "blade", dps, 4, cap) end })
+    end
+    if not any then w.cd = 0.2 end
+end
+
+FIRE.molotov = function(g, w, mult)
+    local pl, st = g.pl, g.st
+    local skip, any = {}, false
+    local slow = HR.CharmMax(g, "chalk")
+    for _ = 1, V(w, "n") do
+        local t = HR.Nearest(g, pl.x, pl.y, skip, 260)
+        if not t then break end
+        skip[t], any = true, true
+        g.zones[#g.zones + 1] = { side = "p", shape = "circle", x = t.x, y = t.y, r = V(w, "r") * st.area, dmg = V(w, "dmg") * mult,
+            wid = "molotov", warn = 0, dur = V(w, "dur"), every = 0.4, tick = 0, fire = true, slow = slow or nil,
+            -- Wildfire: they keep burning once they're out of it
+            dot = w.evo and V(w, "dmg") * mult * 2 or nil }
+    end
+    if not any then w.cd = 0.3 end
 end
 
 ---------------------------------------------------------------------------

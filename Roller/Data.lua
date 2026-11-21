@@ -13,6 +13,7 @@ HR.STEP = 1 / 30                     -- fixed simulation step
 -- Side bets before each room are written but switched off: they were one screen too many
 -- between rooms. (The tests switch them on to keep the code exercised.)
 HR.BETS_ON = false
+HR.BOSS_GATE = 0.05                  -- the share of a boss's health that full damage can take in one second
 HR.WAVE_TIME = 90                    -- seconds of waves before a room's boss
 HR.MAX_WEAPONS, HR.MAX_CHARM_TYPES = 4, 5
 HR.WEAPON_MAX = 5
@@ -24,19 +25,12 @@ HR.SUIT_COLOR = { S = "ffc8c8ff", H = "ffff5a5a", D = "ffffb040", C = "ff8fe08f"
 HR.SUIT_TINT = { S = { 0.62, 0.62, 1 }, H = { 1, 0.4, 0.4 }, D = { 1, 0.72, 0.25 }, C = { 0.5, 0.9, 0.5 } }
 
 ---------------------------------------------------------------------------
--- Classes
+-- The player: one character, the same every run - what you pick up is the build.
+-- (Still a list of one "class", so saved progress keeps the shape it always had.)
 ---------------------------------------------------------------------------
--- soon = true: a class that's written but not released yet. It shows as "??" in the menu and
--- can't be played (the tests switch the flag off to keep its code exercised).
+HR.HERO = "hero"
 HR.CLASSES = {
-    { id = "dice", name = "Dicemaster", suit = "S", sprite = "hero_dice", weapon = "bonedice", charm = "shaved",
-      blurb = "Dice that throw again on doubles. Grab the good ones off the floor." },
-    { id = "cards", name = "Card Sharp", suit = "C", sprite = "hero_cards", weapon = "flick", charm = "joker", need = "boss1", soon = true,
-      needText = "Beat the Pit Boss to unlock",
-      blurb = "Pick up five playing cards and the poker hand plays itself." },
-    { id = "coin", name = "Coin Flipper", suit = "D", sprite = "hero_coin", weapon = "trickcoin", charm = "thumb", need = "boss2", soon = true,
-      needText = "Beat The Dealer to unlock",
-      blurb = "Heads for damage, Tails for defense. Flip coins gamble your streak." },
+    { id = "hero", name = "High Roller", suit = "S", sprite = "hero", weapon = "revolver" },
 }
 HR.CLASS = {}
 for _, c in ipairs(HR.CLASSES) do HR.CLASS[c.id] = c end
@@ -46,22 +40,29 @@ HR.PLAYER = { hp = 100, speed = 112, r = 8, pickup = 46, iframes = 0.5, luckyCha
 ---------------------------------------------------------------------------
 -- Weapons. Arrays are indexed by level 1-5. tags are what charms and relics look for.
 -- evo: the Cash Out - its name, the charm it needs, and what it adds.
+-- start = true: the one you begin with (never dealt). soon = true: written but not released -
+-- never dealt (the tests switch the flag off to keep the code exercised).
 ---------------------------------------------------------------------------
 HR.WEAPONS = {
-    -- class weapons
-    { id = "bonedice", name = "Bone Dice", suit = "S", class = "dice", tags = { roll = true, bounce = true }, icon = "die6",
+    { id = "revolver", name = "Snub Nose", suit = "S", start = true, tags = { gun = true }, icon = "revolver",
+      cd = { 0.7, 0.65, 0.6, 0.55, 0.5 }, dmg = { 12, 14, 17, 20, 25 }, n = { 1, 1, 2, 2, 3 }, pierce = { 1, 1, 1, 2, 2 },
+      desc = "Your revolver: steady shots at the nearest enemy, through it and into the next.",
+      lv = { "", "+damage, shoots faster", "+damage, a second bullet", "+damage, bullets go one enemy deeper", "+damage, a third bullet" },
+      evo = { name = "Tommy Gun", need = "glove", desc = "Every shot is followed by two quick, lighter ones." } },
+    -- three with a game of their own: dice to pick up, a poker hand, a coin to flip
+    { id = "bonedice", name = "Bone Dice", suit = "S", tags = { roll = true, bounce = true }, icon = "die6", dmgLabel = "Damage per pip",
       cd = { 1.2, 1.2, 1.0, 1.0, 0.9 }, dmg = { 2.2, 2.8, 3.2, 3.6, 4.2 }, n = { 2, 2, 2, 3, 3 }, bounce = { 1, 2, 2, 2, 2 },
       chain = { 3, 3, 3, 3, 4 },
-      desc = "Throws dice; damage is the face. Doubles throw again.",
+      desc = "Throws dice; damage is the face. Doubles throw again. Walk over a good die to keep it for your next throw.",
       lv = { "", "+damage, +1 bounce", "+damage, throws faster", "+damage, a third die", "+damage, longer chains" },
       evo = { name = "Natural Roller", need = "weighted", desc = "Sixes explode and are rolled again." } },
-    { id = "flick", name = "Flick", suit = "C", class = "cards", tags = { card = true }, icon = "card",
+    { id = "flick", name = "Flick", suit = "C", soon = true, tags = { card = true }, icon = "card",
       cd = { 1.0, 0.95, 0.9, 0.85, 0.8 }, dmg = { 7, 9, 11, 13, 16 }, n = { 2, 3, 3, 4, 5 }, pierce = { 0, 0, 0, 1, 1 },
       drop = { 6, 6, 5, 5, 5 }, hand = { 1, 1, 1, 1, 1.25 },
       desc = "Throws a fan of cards. Kills drop playing cards for your hand.",
       lv = { "", "+damage, +1 card", "+damage, more card drops", "+damage, +1 card, pierce", "+damage, hands hit 25% harder" },
       evo = { name = "52 Pickup", need = "nail", desc = "Every hand played also rains cards across the room." } },
-    { id = "trickcoin", name = "Trick Coin", suit = "D", class = "coin", tags = { bounce = true, streak = true }, icon = "tcoin",
+    { id = "trickcoin", name = "Trick Coin", suit = "D", soon = true, tags = { bounce = true, streak = true }, icon = "tcoin",
       cd = { 1.1, 1.0, 1.0, 0.9, 0.9 }, dmg = { 8, 10, 12, 14, 17 }, n = { 1, 2, 2, 2, 2 }, bounce = { 2, 2, 3, 3, 3 },
       step = { 1, 1, 1, 1.3, 1.3 }, drop = { 15, 15, 15, 15, 12 },
       desc = "Coins ricochet between enemies. Heads or Tails changes how you fight.",
@@ -84,10 +85,10 @@ HR.WEAPONS = {
       lv = { "", "+damage, higher cap", "+damage, higher cap", "+damage, higher cap", "+damage, higher cap" },
       evo = { name = "Hot Hand", need = "gambler", desc = "A hit halves the streak instead of ending it." } },
     -- Clubs
-    { id = "cat", name = "Black Cat", suit = "C", tags = { jinx = true, summon = true }, icon = "cat",
-      cd = { 4.0, 3.6, 3.2, 2.8, 2.4 }, dmg = { 6, 8, 10, 12, 15 }, n = { 1, 1, 2, 2, 3 },
-      desc = "A cat crosses the room and jinxes what it passes: they take 25% more damage.",
-      lv = { "", "+damage, faster", "+damage, a second cat", "+damage, faster", "+damage, a third cat" },
+    { id = "cat", name = "Black Cat", suit = "C", tags = { jinx = true, summon = true, bounce = true }, icon = "cat",
+      cd = { 2.4, 2.2, 2.0, 1.8, 1.6 }, dmg = { 9, 11, 14, 17, 21 }, n = { 1, 1, 2, 2, 3 }, pounce = { 3, 4, 4, 5, 6 },
+      desc = "A cat leaps from enemy to enemy, clawing each one and jinxing it: a jinxed enemy takes 25% more damage from everything.",
+      lv = { "", "+damage, faster, one more leap", "+damage, a second cat", "+damage, faster, one more leap", "+damage, a third cat, one more leap" },
       evo = { name = "Nine Lives", need = "rabbit", desc = "The cat saves you from one death each room." } },
     { id = "ball8", name = "Magic 8-Ball", suit = "C", tags = { orbit = true, roll = true, jinx = true }, icon = "ball8",
       cd = { 0.6, 0.6, 0.55, 0.55, 0.5 }, dmg = { 8, 10, 12, 14, 17 }, n = { 1, 2, 2, 3, 3 },
@@ -131,6 +132,17 @@ HR.WEAPONS = {
       desc = "A pig follows you eating chips for you. Full, it bursts in a blast.",
       lv = { "", "+damage, fills faster", "+damage, fills faster", "+damage, fills faster", "+damage, fills faster" },
       evo = { name = "Golden Goose", need = "insurance", desc = "Each burst also drops a heart." } },
+    { id = "blade", name = "Switchblade", suit = "H", tags = { bleed = true }, icon = "knife",
+      cd = { 1.4, 1.3, 1.2, 1.1, 1.0 }, dmg = { 6, 7, 9, 11, 13 }, n = { 1, 1, 1, 2, 2 }, bleed = { 4, 5, 6, 8, 10 }, stacks = { 3, 3, 4, 4, 5 },
+      desc = "Throws a knife that leaves a bleed: damage every half second for 4 seconds. Bleeds stack 3 times on one enemy.",
+      lv = { "", "+damage, faster, a deeper bleed", "+damage, bleeds stack 4 times", "+damage, a second knife", "+damage, bleeds stack 5 times" },
+      evo = { name = "Bloodbath", need = "vig", desc = "An enemy that dies bleeding passes its bleed to three more." } },
+    -- (more Clubs)
+    { id = "molotov", name = "Molotov", suit = "C", tags = { zone = true, burn = true }, icon = "molotov",
+      cd = { 3.6, 3.4, 3.2, 3.0, 2.8 }, dmg = { 5, 6, 8, 10, 12 }, n = { 1, 1, 1, 2, 2 }, r = { 38, 42, 46, 50, 56 }, dur = { 3, 3, 3.5, 3.5, 4 },
+      desc = "Sets the floor on fire under an enemy for 3 seconds. Everything standing in the flames burns.",
+      lv = { "", "+damage, a wider fire", "+damage, wider, burns longer", "+damage, wider, a second bottle", "+damage, wider, burns longer" },
+      evo = { name = "Wildfire", need = "chalk", desc = "Enemies keep burning for 3 seconds after they leave the flames." } },
     -- Joker
     { id = "wild", name = "Wild Card", suit = "J", tags = { card = true }, icon = "suit_j", ach = "sevens",
       mult = { 0.5, 0.55, 0.6, 0.65, 0.75 },
@@ -143,12 +155,13 @@ for _, w in ipairs(HR.WEAPONS) do HR.WEAPON[w.id] = w end
 
 ---------------------------------------------------------------------------
 -- Charms: stacking passives. What each does lives in Rules.Recalc and the engine.
+-- needs: only dealt while you hold that weapon.
 ---------------------------------------------------------------------------
 HR.CHARMS = {
     { id = "weighted", name = "Weighted Die", suit = "S", max = 3, desc = "Your lowest possible roll +1.", top = "Rolls can't land in the bottom half." },
     { id = "glove", name = "Sharp's Glove", suit = "S", max = 4, desc = "+8% attack speed.", top = "Every 10th attack is doubled." },
     { id = "pokerface", name = "Poker Face", suit = "S", max = 4, desc = "+10% damage at full health.", top = "Also while shielded." },
-    { id = "gambler", name = "Gambler's Charm", suit = "S", max = 4, desc = "Lucky hits +25% damage.", top = "Lucky hits can't be dodged." },
+    { id = "gambler", name = "Gambler's Charm", suit = "S", max = 4, desc = "Crits deal +25% damage.", top = "Crits can't be dodged." },
     { id = "nail", name = "Lucky Nail", suit = "C", max = 3, desc = "Your shots pierce one more enemy.", top = "Pierced enemies are knocked back." },
     { id = "snakeoil", name = "Snake Oil", suit = "C", max = 3, desc = "A jinxed enemy's death jinxes one more.", top = "Spread jinxes are stronger." },
     { id = "chalk", name = "Chalk", suit = "C", max = 4, desc = "Zones and auras 12% bigger.", top = "They slow." },
@@ -160,12 +173,25 @@ HR.CHARMS = {
     { id = "rabbit", name = "Rabbit's Foot", suit = "H", max = 2, desc = "Survive one killing blow per run.", top = "Each save heals you to half." },
     { id = "insurance", name = "Insurance", suit = "H", max = 3, desc = "15% of a big hit is refunded over 5s.", top = "A full refund leaves a shield." },
     { id = "helping", name = "Second Helping", suit = "H", max = 4, desc = "Healing 15% stronger.", top = "Healing at full health boosts damage." },
+    { id = "vig", name = "The Vig", suit = "H", max = 4, desc = "Lifesteal: heal for 0.5% of the damage you deal.", top = "Crits steal twice as much." },
     { id = "shoes", name = "Comfy Shoes", suit = "H", max = 4, desc = "+6% move speed.", top = "Standing still gives a small shield." },
-    { id = "shaved", name = "Shaved Dice", suit = "S", max = 4, class = "dice", desc = "+5% Loaded: more doubles.", top = "A triple can chain." },
-    { id = "joker", name = "Extra Joker", suit = "C", max = 3, class = "cards", desc = "More Jokers among the card drops.", top = "A Joker pair hits twice." },
-    { id = "thumb", name = "Lucky Thumb", suit = "D", max = 3, class = "coin", desc = "Coin +4% your way.", top = "A lost flip keeps one streak." },
+    { id = "shaved", name = "Shaved Dice", suit = "S", max = 4, needs = "bonedice", desc = "+5% Loaded: more doubles.", top = "A triple can chain." },
+    { id = "joker", name = "Extra Joker", suit = "C", max = 3, needs = "flick", desc = "More Jokers among the card drops.", top = "A Joker pair hits twice." },
+    { id = "thumb", name = "Lucky Thumb", suit = "D", max = 3, needs = "trickcoin", desc = "Coin +4% your way.", top = "A lost flip keeps one streak." },
 }
 HR.CHARM = {}
+
+-- Boosts: small upgrades that stack without limit for the rest of the run. They fill a level-up's
+-- empty places once there's nothing else to deal, so a finished build still grows.
+HR.BOOSTS = {
+    { id = "dmg", name = "Hollow Points", icon = "bullet", desc = "+4% damage.", dmg = 0.04 },
+    { id = "atk", name = "Hair Trigger", icon = "revolver", desc = "+3% attack speed.", atk = 0.03 },
+    { id = "hp", name = "Thick Hide", icon = "heart", desc = "+8 maximum health, and heal 8.", hp = 8 },
+    { id = "luck", name = "Lucky Break", icon = "leaf", desc = "+2 Luck.", luck = 2 },
+    { id = "leech", name = "Skim", icon = "chip", desc = "+0.25% lifesteal.", lifesteal = 0.0025 },
+}
+HR.BOOST = {}
+for _, b in ipairs(HR.BOOSTS) do HR.BOOST[b.id] = b end
 for _, c in ipairs(HR.CHARMS) do HR.CHARM[c.id] = c end
 
 ---------------------------------------------------------------------------
@@ -174,7 +200,7 @@ for _, c in ipairs(HR.CHARMS) do HR.CHARM[c.id] = c end
 HR.RELICS = {
     { id = "marked", name = "Marked Deck", desc = "Level-ups deal four cards.", ach = "dealerclean" },
     { id = "whistle", name = "Pit Boss's Whistle", desc = "An elite that would die fights for you for 10 seconds first." },
-    { id = "shoe6", name = "Dealer's Shoe", desc = "Every sixth attack is a lucky hit." },
+    { id = "shoe6", name = "Dealer's Shoe", desc = "Every sixth attack is a crit." },
     { id = "hotdice", name = "Hot Dice", desc = "A maximum roll adds a bounce to that shot." },
     { id = "chair", name = "The Good Chair", desc = "Standing still doubles attack speed; moving halves it." },
     { id = "seven", name = "Lucky Seven", desc = "Every seventh kill drops a pile of chips." },
@@ -229,11 +255,11 @@ HR.ROOMS = {
 }
 
 HR.BOSSES = {
-    pit     = { name = "The Pit Boss", line = "No winners on my floor.", sprite = "boss_pit", hp = 600, bounty = 500, ach = "boss1" },
-    dealer  = { name = "The Dealer", line = "Hit, or stand?", sprite = "boss_dealer", hp = 2600, bounty = 1000, ach = "boss2" },
-    snakes  = { name = "Snake Eyes", line = "Two for one.", sprite = "boss_serpent", hp = 3400, bounty = 1500, ach = "boss3" },
-    fortune = { name = "Madame Fortune", line = "I've seen how this ends.", sprite = "boss_fortune", hp = 5000, bounty = 2000, ach = "boss4" },
-    house   = { name = "The House", line = "The House always wins.", sprite = "boss_house", hp = 7600, bounty = 5000, ach = "house" },
+    pit     = { name = "The Pit Boss", line = "No winners on my floor.", sprite = "boss_pit", hp = 2000, bounty = 500, ach = "boss1" },
+    dealer  = { name = "The Dealer", line = "Hit, or stand?", sprite = "boss_dealer", hp = 4500, bounty = 1000, ach = "boss2" },
+    snakes  = { name = "Snake Eyes", line = "Two for one.", sprite = "boss_serpent", hp = 9000, bounty = 1500, ach = "boss3" },
+    fortune = { name = "Madame Fortune", line = "I've seen how this ends.", sprite = "boss_fortune", hp = 14000, bounty = 2000, ach = "boss4" },
+    house   = { name = "The House", line = "The House always wins.", sprite = "boss_house", hp = 22000, bounty = 5000, ach = "house" },
 }
 
 HR.ELITE_TRAITS = { "shielded", "splitting", "lucky", "magnetic" }
@@ -260,7 +286,7 @@ for _, b in ipairs(HR.BETS) do HR.BET[b.id] = b end
 
 HR.RULES = {
     { id = "none", name = "No Rule", desc = "A plain run." },
-    { id = "happy", name = "Happy Hour", desc = "Double chips, and half again as many enemies." },
+    { id = "happy", name = "Happy Hour", desc = "Double chips, and 50% more enemies." },
     { id = "dry", name = "Dry Spell", desc = "No healing from any source. +50% chips." },
     { id = "loose", name = "Loose Slots", desc = "Every roll is made twice, keeping the better." },
     { id = "cursed", name = "Cursed Table", desc = "Every relic chest is cursed." },
@@ -271,70 +297,30 @@ HR.RULE = {}
 for _, r in ipairs(HR.RULES) do HR.RULE[r.id] = r end
 
 ---------------------------------------------------------------------------
--- Talents: three trees of five rows per class. A row opens per 3 points in its tree.
+-- Talents: three trees of five rows. A row opens once the row above it is full.
 ---------------------------------------------------------------------------
-HR.TALENT_CAP, HR.TALENT_ROW = 20, 3
+HR.TALENT_CAP = 20
 HR.MAX_CLASS_LEVEL = 15
 HR.TALENTS = {
-    dice = {
-        { name = "Loaded", tip = "Loaded is your chance to throw a double. A double throws the dice again, and doubles can chain. It starts at 17% and can't pass 60%.", rows = {
-            { id = "dl1", max = 3, desc = "+3% Loaded (more doubles)." },
-            { id = "dl2", max = 3, desc = "Doubles deal +15% damage." },
-            { id = "dl3", max = 2, desc = "Doubles can chain one more time." },
-            { id = "dl4", max = 1, desc = "Snake eyes is a small blast, not a fizzle." },
-            { id = "dl5", max = 1, name = "Sixes Wild", desc = "Double sixes throw two free throws." } } },
-        { name = "Ricochet", tip = "How your dice bounce. A die that hits jumps on to another enemy; this tree gives more bounces, smarter ones and harder ones.", rows = {
-            { id = "dr1", max = 2, desc = "Dice bounce one more time." },
-            { id = "dr2", max = 1, desc = "Bounces seek the nearest enemy anywhere." },
-            { id = "dr3", max = 2, desc = "Dice stay on the floor 2 seconds longer." },
-            { id = "dr4", max = 3, desc = "Each bounce adds 8% damage." },
-            { id = "dr5", max = 1, name = "Avalanche", desc = "A die splits in two on its last bounce." } } },
-        { name = "Fortune", tip = "Luck. Each point adds 1% to your chance of a lucky hit (half again the damage) and of a bad die being rolled again, and makes rare cards, legendary relics and big chests a little likelier.", rows = {
+    hero = {
+        { name = "Muscle", tip = "Hitting harder. Everything here works with every weapon you pick up, from your first shot.", rows = {
+            { id = "hm1", max = 3, desc = "+4% damage." },
+            { id = "hm2", max = 3, desc = "+3% attack speed." },
+            { id = "hm3", max = 2, desc = "Crits deal +15% damage." },
+            { id = "hm4", max = 2, desc = "Blasts, auras and orbits are 6% bigger." },
+            { id = "hm5", max = 1, name = "Packing Heat", desc = "Your revolver starts each run at level 2." } } },
+        { name = "Grit", tip = "Staying alive: more health, quicker feet, and a longer moment of safety after a hit. None of it saves you from a boss's red.", rows = {
+            { id = "hg1", max = 3, desc = "+6 maximum health." },
+            { id = "hg2", max = 2, desc = "+4% move speed." },
+            { id = "hg3", max = 2, desc = "+0.1s of safety after a hit." },
+            { id = "hg4", max = 2, desc = "Every hit hurts 1 less." },
+            { id = "hg5", max = 1, name = "Tough Guy", desc = "Start each room with a 20-point shield." } } },
+        { name = "Fortune", tip = "Luck. Each point of Luck is +1% crit chance (a crit deals 50% more damage). Luck also makes rare cards, legendary relics and big chests turn up more often.", rows = {
             { id = "df1", max = 3, desc = "+3 Luck." },
             { id = "df2", max = 2, desc = "Folding gives 1 more Luck." },
             { id = "df3", max = 2, desc = "One more reroll token each room." },
             { id = "df4", max = 2, desc = "Chips are worth 5% more." },
-            { id = "df5", max = 1, name = "Lucky Charm", desc = "Start each run holding two sixes." } } },
-    },
-    cards = {
-        { name = "High Roller", rows = {
-            { id = "ch1", max = 3, desc = "Hand effects +10%." },
-            { id = "ch2", max = 1, desc = "No 2s or 3s drop." },
-            { id = "ch3", max = 2, desc = "Flushes +25%." },
-            { id = "ch4", max = 2, desc = "Three of a kind or better gives a shield." },
-            { id = "ch5", max = 1, name = "The Nuts", desc = "Your first hand each room counts one rank higher." } } },
-        { name = "Quick Hands", rows = {
-            { id = "cq1", max = 3, desc = "Cards stay on the floor 1 second longer." },
-            { id = "cq2", max = 2, desc = "Cards drop 10% more often." },
-            { id = "cq3", max = 2, desc = "High card and pairs are 15% stronger." },
-            { id = "cq4", max = 3, desc = "Each hand played speeds your attacks for the room." },
-            { id = "cq5", max = 1, name = "Six-Card Stud", desc = "Hold six cards; the best five play." } } },
-        { name = "Stacked Deck", rows = {
-            { id = "cs1", max = 3, desc = "Jinxes last 20% longer." },
-            { id = "cs2", max = 2, desc = "Flick slows what it hits." },
-            { id = "cs3", max = 1, desc = "A Joker starts your first hand each room." },
-            { id = "cs4", max = 2, desc = "Card drops lean toward the suit you hold most." },
-            { id = "cs5", max = 1, name = "Marked Cards", desc = "A card that would improve your hand glows." } } },
-    },
-    coin = {
-        { name = "Heads", rows = {
-            { id = "oh1", max = 3, desc = "Heads: +2% damage per streak." },
-            { id = "oh2", max = 2, desc = "Heads: +1 ricochet." },
-            { id = "oh3", max = 1, desc = "A lucky hit on Heads can add a streak." },
-            { id = "oh4", max = 2, desc = "At streak 5+, coins explode." },
-            { id = "oh5", max = 1, name = "Heads I Win", desc = "At streak 7+, every hit is lucky." } } },
-        { name = "Tails", rows = {
-            { id = "ot1", max = 3, desc = "Tails: +1 armor per streak." },
-            { id = "ot2", max = 1, desc = "Orbiting coins block shots." },
-            { id = "ot3", max = 2, desc = "Tails heals you a little per streak." },
-            { id = "ot4", max = 1, desc = "A hit on Tails costs a streak step, not health." },
-            { id = "ot5", max = 1, name = "Tails You Lose", desc = "Damage blocked on Tails is fired back." } } },
-        { name = "Edge", rows = {
-            { id = "oe1", max = 3, desc = "Coin +2% your way." },
-            { id = "oe2", max = 2, desc = "Flip coins stay 2 seconds longer." },
-            { id = "oe3", max = 2, desc = "Flip coins drop 15% more often." },
-            { id = "oe4", max = 2, desc = "Streak cap +1." },
-            { id = "oe5", max = 1, name = "Two-Faced", desc = "Your first flip each room can't lose." } } },
+            { id = "df5", max = 1, name = "Friends Upstairs", desc = "The first chest of a run always holds three prizes or more." } } },
     },
 }
 
@@ -348,8 +334,8 @@ HR.ACHIEVEMENTS = {
     { id = "boss4", name = "Unforeseen", desc = "Beat Madame Fortune.", gives = "Horseshoe" },
     { id = "house", name = "Broke the Bank", desc = "Beat The House.", gives = "Pocket Aces, higher Stakes" },
     { id = "triple", name = "Three of a Kind", desc = "Roll a triple.", gives = "Lucky Streak" },
-    { id = "flush", name = "All One Colour", desc = "Play a flush.", class = "cards" },
-    { id = "streak6", name = "On a Roll", desc = "Reach a 6-streak.", class = "coin" },
+    { id = "flush", name = "All One Colour", desc = "Play a flush.", needs = "flick" },
+    { id = "streak6", name = "On a Roll", desc = "Reach a 6-streak.", needs = "trickcoin" },
     { id = "bets3", name = "Sure Thing", desc = "Win three side bets in one run.", bets = true },
     { id = "sevens", name = "Jackpot", desc = "Hit triple sevens.", gives = "Wild Card" },
     { id = "walk3000", name = "Quit While Ahead", desc = "Walk away with 3,000 chips.", gives = "Counterfeit Plates" },
@@ -379,6 +365,6 @@ HR.TIPS = {
     "Move with WASD or the arrow keys. Your weapons fire on their own.",
     "Gold chips are your score. Enemies drop them; walk away after a boss to keep them.",
     "A boss's red floor markings kill in one hit. Step out before they fill in.",
-    "Red on the floor means get out of it.",
+    "A weapon crate holds a new weapon. Walk over it.",
     "A level-up deals you cards: press 1, 2 or 3. F folds for Luck.",
 }

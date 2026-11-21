@@ -52,7 +52,18 @@ function HR.DB()
     db.journal = db.journal or {}
     db.stats = db.stats or { runs = 0, died = 0, walked = 0, won = 0 }
     db.opts = db.opts or { shake = true, numbers = true }
-    db.class = db.class or "dice"
+    -- one character now: what was earned as the Dicemaster carries over (level, bosses beaten);
+    -- the talent trees are new, so the points come back to be spent again
+    if db.class ~= HR.HERO then
+        local old = db.cls.dice
+        if old and not db.cls[HR.HERO] then
+            old.talents = {}
+            db.cls[HR.HERO] = old
+        end
+        db.cls.dice, db.cls.cards, db.cls.coin = nil, nil, nil
+        db.save = nil
+        db.class = HR.HERO
+    end
     db.mode = db.mode or "full"
     db.stakes = db.stakes or 0
     return db
@@ -84,11 +95,11 @@ function HR.ClassUnlocked(id)
     return c ~= nil and not c.soon and (not c.need or HR.Has(c.need))
 end
 
---- Achievements that can be earned with the classes that are out (the list the player sees).
+--- Achievements that can be earned with what's in the game now (the list the player sees).
 function HR.OpenAchievements()
     local out = {}
     for _, a in ipairs(HR.ACHIEVEMENTS) do
-        if (not a.class or not HR.CLASS[a.class].soon) and (not a.bets or HR.BETS_ON) then out[#out + 1] = a end
+        if (not a.needs or not HR.WEAPON[a.needs].soon) and (not a.bets or HR.BETS_ON) then out[#out + 1] = a end
     end
     return out
 end
@@ -164,7 +175,9 @@ function HR.CanLearn(id, talentId)
     local c = HR.ClassDB(id)
     if (c.talents[talentId] or 0) >= row.max then return false end
     if HR.TalentsSpent(id) >= HR.TalentPoints(id) then return false end
-    return HR.TalentsSpent(id, ti) >= (ri - 1) * HR.TALENT_ROW
+    -- a row opens once the row above it is full
+    local above = ri > 1 and HR.TALENTS[id][ti].rows[ri - 1]
+    return not above or (c.talents[above.id] or 0) >= above.max
 end
 
 function HR.Learn(id, talentId)
@@ -222,7 +235,7 @@ function HR.Suits(g)
     for s, extra in pairs(g.lentSuit or {}) do
         if extra.till > g.time then n[s] = n[s] + extra.n end
     end
-    -- the Wild Card joins your biggest suit (your class's suit on a tie)
+    -- the Wild Card joins your biggest suit (Spades on a tie)
     if wild > 0 then
         local best, bn = HR.CLASS[g.class].suit, -1
         for _, s in ipairs(HR.SUITS) do
@@ -269,7 +282,7 @@ function HR.Recalc(g)
     local _, sb = HR.Suits(g)
     local st = { dmg = 1, atk = 1, area = 1, speed = P.speed, pickup = P.pickup, armor = 0, luck = 0,
         luckyMult = P.luckyMult, bounce = 0, pierce = 0, minRoll = 0, chip = 1, heal = 1, maxhp = P.hp,
-        loaded = 0, iframes = P.iframes, jinxDur = 5, jinxAmp = 0.25 }
+        loaded = 0, iframes = P.iframes, jinxDur = 5, jinxAmp = 0.25, lifesteal = 0 }
     local pl = g.pl
     -- charms
     st.minRoll = C("weighted")
@@ -285,13 +298,30 @@ function HR.Recalc(g)
     st.pickup = st.pickup * (1 + 0.15 * C("penny"))
     st.bounce = C("marbles")
     st.heal = st.heal + 0.15 * C("helping")
+    st.lifesteal = 0.005 * C("vig")
     st.speed = st.speed * (1 + 0.06 * C("shoes"))
-    st.loaded = 0.05 * C("shaved") + 0.03 * T("dl1")
+    st.loaded = 0.05 * C("shaved")
     -- talents
+    st.dmg = st.dmg + 0.04 * T("hm1")
+    st.atk = st.atk + 0.03 * T("hm2")
+    st.luckyMult = st.luckyMult + 0.15 * T("hm3")
+    st.area = st.area + 0.06 * T("hm4")
+    st.maxhp = st.maxhp + 6 * T("hg1")
+    st.speed = st.speed * (1 + 0.04 * T("hg2"))
+    st.iframes = st.iframes + 0.1 * T("hg3")
+    st.armor = st.armor + T("hg4")
     st.luck = st.luck + 3 * T("df1")
-    st.bounce = st.bounce + T("dr1")
-    st.jinxDur = st.jinxDur * (1 + 0.2 * T("cs1"))
-    if g.handsPlayed and T("cq4") > 0 then st.atk = st.atk + math.min(0.3, g.handsPlayed * 0.015 * T("cq4")) end
+    -- boosts picked at level-ups
+    for id, k in pairs(g.boosts or {}) do
+        local b = HR.BOOST[id]
+        if b then
+            st.dmg = st.dmg + (b.dmg or 0) * k
+            st.atk = st.atk + (b.atk or 0) * k
+            st.maxhp = st.maxhp + (b.hp or 0) * k
+            st.luck = st.luck + (b.luck or 0) * k
+            st.lifesteal = st.lifesteal + (b.lifesteal or 0) * k
+        end
+    end
     -- suits
     local function tier(s) return sb[s] or 0 end
     local function doubled(s) return sb.fullHouse == s and 2 or 1 end
@@ -324,15 +354,16 @@ function HR.Recalc(g)
     if rule == "fast" then st.atk = st.atk * 1.3 end
     if rule == "loose" then st.advantage = 1 end
     if HR.CharmMax(g, "fourleaf") then st.advantage = math.max(st.advantage or 0, 0.2) end
-    -- the Coin Flipper's side
-    if g.class == "coin" and g.coin then
+    -- the Trick Coin's side
+    local tcoin = HR.FindWeapon(g, "trickcoin")
+    if tcoin then
+        g.coin = g.coin or { side = "H", streak = 0, lost = 0, best = 0 }
         local s = g.coin.streak
-        local w = HR.FindWeapon(g, "trickcoin")
-        local step = w and HR.WVal(w, "step") or 1
+        local step = HR.WVal(tcoin, "step") or 1
         if g.coin.side == "H" then
-            st.dmg = st.dmg + 0.10 + s * (0.06 + 0.02 * T("oh1")) * step
+            st.dmg = st.dmg + 0.10 + s * 0.06 * step
         else
-            st.armor = st.armor + 2 + s * (1 + T("ot1")) * step
+            st.armor = st.armor + 2 + s * step
             st.speed = st.speed * (1.08 + 0.01 * s)
         end
     end
@@ -436,11 +467,11 @@ end
 
 --- The coin's chance of landing your way.
 function HR.FlipOdds(g)
-    local p = 0.5 + (g.luckNow or 0) * 0.005 + 0.04 * HR.Charm(g, "thumb") + 0.02 * HR.T(g, "oe1")
+    local p = 0.5 + (g.luckNow or 0) * 0.005 + 0.04 * HR.Charm(g, "thumb")
     return clamp(p, 0.3, 0.7)
 end
 
-function HR.StreakCap(g) return 8 + HR.T(g, "oe4") end
+function HR.StreakCap(g) return 8 end
 
 --- Flips. Returns true if it landed on your side. Applies the streak.
 function HR.Flip(g)
@@ -588,26 +619,16 @@ function HR.HandText(cards)
     return table.concat(parts, ", ")
 end
 
---- A random card drop for the Card Sharp, shaped by talents, charms and Luck.
+--- A random card drop for Flick's hand, shaped by charms and Luck.
 function HR.DrawCard(g)
     local jokerChance = 0.02 + 0.03 * HR.Charm(g, "joker") + (g.luckNow or 0) * 0.001
     if HR.FindWeapon(g, "wild") then jokerChance = jokerChance + 0.04 end
     if g.rand.chance(jokerChance) then return { joker = true } end
-    local lo = (HR.T(g, "ch2") > 0) and 4 or 2
-    lo = math.min(10, lo + 2 * g.st.minRoll) -- Weighted Die: no low cards
+    local lo = math.min(10, 2 + 2 * g.st.minRoll) -- Weighted Die: no low cards
     local r = g.rand.i(lo, 14)
     -- Luck: a second try at a face card
     if r < 11 and g.rand.chance(math.min(0.4, (g.luckNow or 0) * 0.01)) then r = math.max(r, g.rand.i(lo, 14)) end
-    local s = HR.SUITS[g.rand.i(1, 4)]
-    local lean = 0.2 * HR.T(g, "cs4")
-    if lean > 0 and g.hand and #g.hand > 0 and g.rand.chance(lean) then
-        local seen, best, bn = {}, s, 0
-        for _, c in ipairs(g.hand) do
-            if c.s then seen[c.s] = (seen[c.s] or 0) + 1 if seen[c.s] > bn then best, bn = c.s, seen[c.s] end end
-        end
-        s = best
-    end
-    return { r = r, s = s }
+    return { r = r, s = HR.SUITS[g.rand.i(1, 4)] }
 end
 
 function HR.CardText(c)
@@ -677,7 +698,7 @@ function HR.Offer(g, n)
     end
     if #g.weapons < HR.MAX_WEAPONS then
         for _, def in ipairs(HR.WEAPONS) do
-            if not def.class and not HR.FindWeapon(g, def.id) and HR.WeaponUnlocked(def) then
+            if not def.start and not def.soon and not HR.FindWeapon(g, def.id) and HR.WeaponUnlocked(def) then
                 add({ kind = "weapon", id = def.id, new = true, title = def.name, sub = "New weapon", desc = def.desc,
                     suit = def.suit, icon = def.icon, hint = def.evo and ("Cash Out needs " .. (def.evo.need == "flush" and "a Flush" or HR.CHARM[def.evo.need].name)) }, 3 * rare)
             end
@@ -685,14 +706,14 @@ function HR.Offer(g, n)
     end
     local types = HR.CharmTypes(g)
     for _, def in ipairs(HR.CHARMS) do
-        if not def.class or def.class == g.class then
+        if not def.needs or HR.FindWeapon(g, def.needs) then
             local have = HR.Charm(g, def.id)
             if have > 0 and have < def.max then
                 add({ kind = "charm", id = def.id, title = def.name, sub = ("Charm %d of %d"):format(have + 1, def.max),
                     desc = (have + 1 == def.max) and (def.desc .. " At max: " .. def.top) or def.desc, suit = def.suit, owned = true }, 3)
             elseif have == 0 and types < HR.MAX_CHARM_TYPES then
                 add({ kind = "charm", id = def.id, new = true, title = def.name, sub = "New charm", desc = def.desc, suit = def.suit },
-                    def.class and 3 or 2)
+                    def.needs and 3 or 2)
             end
         end
     end
@@ -711,10 +732,19 @@ function HR.Offer(g, n)
         for _, c in ipairs(pool) do if c.owned then owned[#owned + 1] = c end end
         if #owned > 0 then out[#out] = g.rand.pick(owned) end
     end
-    -- nothing left to offer: chips and a breather
+    -- nothing (or not enough) left to deal: boosts that stack for the rest of the run, each
+    -- different, and after those chips
+    local spare = {}
+    for i, b in ipairs(HR.BOOSTS) do spare[i] = b end
     while #out < math.min(n, 3) do
-        if #out % 2 == 0 or g.st.heal <= 0 or g.noHeal then out[#out + 1] = { kind = "bonus", id = "chips", title = "Tip", sub = "Bonus", desc = "+60 chips." }
-        else out[#out + 1] = { kind = "bonus", id = "heal", title = "Breather", sub = "Bonus", desc = "Heal 25." } end
+        if #spare > 0 then
+            local b = table.remove(spare, g.rand.i(1, #spare))
+            local have = g.boosts and g.boosts[b.id] or 0
+            out[#out + 1] = { kind = "boost", id = b.id, title = b.name, sub = have > 0 and ("Boost  (you have %d)"):format(have) or "Boost",
+                desc = b.desc, icon = b.icon }
+        else
+            out[#out + 1] = { kind = "bonus", id = "chips", title = "Tip", sub = "Bonus", desc = "+60 chips.", icon = "chip" }
+        end
     end
     return out
 end
@@ -722,20 +752,14 @@ end
 ---------------------------------------------------------------------------
 -- Named builds (the Build Journal)
 ---------------------------------------------------------------------------
-local function TreeRanks(g, prefix)
-    local n = 0
-    for id, r in pairs(g.talents) do if id:sub(1, 2) == prefix then n = n + r end end
-    return n
-end
-
 HR.BUILDS = {
-    { name = "Loaded", test = function(g, C, R, W) return g.class == "dice" and C("weighted") >= 1 and (C("shaved") >= 2 or TreeRanks(g, "dl") >= 4) end },
-    { name = "Avalanche", test = function(g, C, R, W) return g.class == "dice" and C("marbles") >= 2 and (R("hotdice") or HR.T(g, "dr5") > 0) end },
-    { name = "Royal Hunt", test = function(g, C, R, W) return g.class == "cards" and (C("joker") >= 2 or TreeRanks(g, "ch") >= 6) end },
-    { name = "Rapid Fire", test = function(g, C, R, W) return g.class == "cards" and C("glove") >= 2 and TreeRanks(g, "cq") >= 4 end },
+    { name = "Loaded", test = function(g, C, R, W) return W("bonedice") and C("weighted") >= 1 and C("shaved") >= 2 end },
+    { name = "Avalanche", test = function(g, C, R, W) return W("bonedice") and C("marbles") >= 2 and R("hotdice") end },
+    { name = "Royal Hunt", test = function(g, C, R, W) return W("flick") and C("joker") >= 2 end },
+    { name = "Rapid Fire", test = function(g, C, R, W) return W("revolver") and C("glove") >= 2 and C("nail") >= 1 end },
     { name = "Lockdown", test = function(g, C, R, W) return g.suits.n.C >= 5 end },
-    { name = "Hot Streak", test = function(g, C, R, W) return g.class == "coin" and W("streak") and C("gambler") >= 1 end },
-    { name = "The Wall", test = function(g, C, R, W) return g.class == "coin" and W("clover") and g.suits.n.H >= 3 end },
+    { name = "Hot Streak", test = function(g, C, R, W) return W("streak") and C("gambler") >= 2 end },
+    { name = "The Wall", test = function(g, C, R, W) return W("clover") and W("edge") and g.suits.n.H >= 3 end },
     { name = "The Bank", test = function(g, C, R, W) return W("well") and C("luckycoin") >= 2 and g.suits.n.D >= 3 end },
     { name = "Jackpot", test = function(g, C, R, W) return W("slots") and C("fourleaf") >= 2 end },
     { name = "Jinx Plague", test = function(g, C, R, W) return W("cat") and W("ball8") and C("snakeoil") >= 1 end },

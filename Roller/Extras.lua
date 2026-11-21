@@ -1,4 +1,4 @@
--- Roller/Extras.lua: what happens on the floor between the enemies - power-up pickups,
+-- Roller/Extras.lua: what happens on the floor between the enemies - weapon crates, power-up pickups,
 -- breakable casino furniture, room events, a mini-boss, chests from elites, card rarities,
 -- legendary relics, the bosses' rapid barrages, and the little effects the UI draws.
 -- Loaded after Engine.lua, which calls the HR.On... / HR.Step... hooks defined here.
@@ -63,6 +63,25 @@ function HR.RollRarity(g, bump)
     return min(4, r + (bump or 0))
 end
 
+--- "Damage 10 > 12" for a weapon card, so a pick shows what it buys. from 0: a new weapon.
+local function StatLine(def, from, to)
+    local a = def.dmg
+    if type(a) ~= "table" then return nil end
+    local label = def.dmgLabel or "Damage"
+    local function v(l) return ("%g"):format(a[min(l, HR.WEAPON_MAX)]) end
+    if from < 1 then return ("%s %s"):format(label, v(to)) end
+    if v(from) == v(to) then return nil end
+    return ("%s %s > %s"):format(label, v(from), v(to))
+end
+
+local function AddStat(g, c)
+    if c.kind ~= "weapon" then return end
+    local w = HR.FindWeapon(g, c.id)
+    local from = w and w.lvl or 0
+    local line = StatLine(HR.WEAPON[c.id], from, from + (c.amount or 1))
+    if line then c.desc = (c.desc or "") .. "\n|cff20ff20" .. line .. "|r" end
+end
+
 local baseOffer = HR.Offer
 --- Level-up cards, now with a rarity each. A card is only marked rare if it really gives more.
 function HR.Offer(g, n, bump)
@@ -93,8 +112,60 @@ function HR.Offer(g, n, bump)
         else
             c.amount = 1
         end
+        AddStat(g, c)
     end
     return cards
+end
+
+---------------------------------------------------------------------------
+-- Weapon crates: one lands near you early in every room. Walk over it and pick one of three
+-- weapons you don't have (or, with every slot full, two levels for one you do).
+---------------------------------------------------------------------------
+HR.CRATE_AT = 18
+
+function HR.CrateCards(g)
+    local pool = {}
+    if #g.weapons < HR.MAX_WEAPONS then
+        for _, def in ipairs(HR.WEAPONS) do
+            if not def.start and not def.soon and not HR.FindWeapon(g, def.id) and HR.WeaponUnlocked(def) then
+                pool[#pool + 1] = { kind = "weapon", id = def.id, new = true, amount = 1, title = def.name, sub = "New weapon", desc = def.desc,
+                    suit = def.suit, icon = def.icon,
+                    hint = def.evo and ("Cash Out needs " .. (def.evo.need == "flush" and "a Flush" or HR.CHARM[def.evo.need].name)) }
+            end
+        end
+    end
+    if #pool == 0 then
+        for _, w in ipairs(g.weapons) do
+            local def = HR.WEAPON[w.id]
+            if w.lvl < HR.WEAPON_MAX then
+                local amount = min(2, HR.WEAPON_MAX - w.lvl)
+                pool[#pool + 1] = { kind = "weapon", id = w.id, amount = amount, owned = true, title = def.name,
+                    sub = amount > 1 and "+2 levels" or ("Level " .. (w.lvl + 1)), desc = def.lv[w.lvl + amount], suit = def.suit, icon = def.icon }
+            end
+        end
+    end
+    local out = {}
+    while #out < 3 and #pool > 0 do out[#out + 1] = table.remove(pool, g.rand.i(1, #pool)) end
+    for _, c in ipairs(out) do AddStat(g, c) end
+    return out
+end
+
+function HR.OpenCrate(g)
+    local cards = HR.CrateCards(g)
+    g.cratesOpened = (g.cratesOpened or 0) + 1
+    -- every weapon held and at its top level: it's a chest instead
+    if #cards == 0 then return HR.OpenChest(g) end
+    local m = { kind = "level", title = "A weapon crate", sub = "Pick one", options = {} }
+    for i, c in ipairs(cards) do
+        m.options[i] = { key = tostring(i), title = c.title, sub = c.sub, desc = c.desc, hint = c.hint, suit = c.suit, icon = c.icon,
+            card = c, pick = function() HR.TakeCard(g, c) end }
+    end
+    g.menu = m
+    HR.Event(g, "chest")
+end
+
+function HR.DropCrate(g, x, y)
+    return HR.DropPickup(g, { kind = "crate", x = x, y = y })
 end
 
 ---------------------------------------------------------------------------
@@ -151,7 +222,7 @@ function HR.UsePower(g, id)
         end
     elseif id == "alarm" then
         for _, e in ipairs(HR.Visible(g)) do
-            if e.boss or e.obj then HR.Hit(g, e, 40 * g.diff, "alarm")
+            if e.boss or e.obj or e.mini then HR.Hit(g, e, 40 * g.diff, "alarm") -- (the Enforcer shrugs it off like a boss)
             elseif e.elite then HR.Hit(g, e, e.maxhp * 0.5, "alarm", { exact = true, noLucky = true })
             else HR.Hit(g, e, 99999, "alarm", { exact = true, noLucky = true }) end
         end
@@ -180,7 +251,7 @@ end
 function HR.OpenChest(g)
     local luck = g.luckNow or 0
     local n = ({ 1, 3, 5 })[g.rand.weighted({ 65, 28 + luck * 0.4, 7 + luck * 0.2 })]
-    if HR.Relic(g, "masterkey") then n = max(3, n) end
+    if HR.Relic(g, "masterkey") or (HR.T(g, "df5") > 0 and (g.chestsOpened or 0) == 0) then n = max(3, n) end
     local lines = {}
     for i = 1, n do
         local cards = HR.Offer(g, 3, 1)
@@ -207,9 +278,10 @@ function HR.OpenChest(g)
     end
 end
 
---- Pickups the engine doesn't know: power-ups and chests.
+--- Pickups the engine doesn't know: power-ups, chests and weapon crates.
 function HR.CollectExtra(g, p)
     if p.kind == "power" then HR.UsePower(g, p.id)
+    elseif p.kind == "crate" then HR.OpenCrate(g)
     elseif p.kind == "chest" then HR.OpenChest(g) end
 end
 
@@ -247,7 +319,7 @@ end
 -- Room events and the mini-boss
 ---------------------------------------------------------------------------
 HR.ENEMIES.goldimp = { name = "Golden Imp", sprite = "goldimp", hp = 34, speed = 100, r = 8, xp = 3 }
-HR.ENEMIES.enforcer = { name = "The Enforcer", sprite = "enforcer", hp = 60, speed = 40, r = 15, xp = 12, size = 46, heavy = true }
+HR.ENEMIES.enforcer = { name = "The Enforcer", sprite = "enforcer", hp = 200, speed = 40, r = 15, xp = 12, size = 46, heavy = true }
 
 local function NearPlayer(g, lo, hi)
     local a, r = g.rand.f() * 2 * pi, lo + g.rand.f() * (hi - lo)
@@ -333,7 +405,7 @@ HR.EVENTS = EVENTS
 
 --- Called at the start of each room: furniture, and the timers for events and the mini-boss.
 function HR.RoomExtras(g)
-    g.eventT, g.miniDone, g.table = 14 + g.rand.f() * 6, nil, nil
+    g.eventT, g.miniDone, g.table, g.crateDone = 22 + g.rand.f() * 6, nil, nil, nil
     g.sched = {}
     local b = g.bounds
     local cx, cy = (b[1] + b[3]) / 2, (b[2] + b[4]) / 2
@@ -354,6 +426,14 @@ end
 
 --- Every step of the waves.
 function HR.StepEvents(g, dt)
+    if not g.crateDone and g.roomTime >= HR.CRATE_AT then
+        g.crateDone = true
+        local x, y = NearPlayer(g, 80, 120)
+        if HR.DropCrate(g, x, y) then
+            HR.Fx(g, "ring", x, y, 0.5, { r = 50 })
+            HR.Banner(g, "|cffffd100A weapon crate!|r Walk over it.", 3)
+        end
+    end
     -- the mini-boss, halfway through
     if not g.miniDone and g.roomTime >= HR.WAVE_TIME * 0.5 then
         g.miniDone = true

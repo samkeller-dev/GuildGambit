@@ -5,6 +5,34 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.6.1 - 2026-11-21
+
+- **Lottery: unpaid tickets no longer get into the draw.** A player could end up with tickets the pot character never got gold for. If their addon was still waiting on a ticket mail and they sent another mail with gold, that mail's "sent" was taken for the ticket mail.
+  - Buying is stricter: a ticket mail stops waiting after 30 seconds, and it claims nothing if another mail is sent while it waits, or if more gold leaves your bags than it costs. In each case your tickets still count once the pot character's mailbox gets the gold. **Pay debts** waits for a ticket mail to finish.
+  - Once the pot character has opened their mailbox an hour or more after ticket sales close (when every ticket's gold has arrived), tickets with no gold behind them stay out of the draw. They show as **not paid** on the lottery page, the drawer and the player are told, and nothing is owed back for them. If the gold turns up after the draw, it's owed back like any other missed ticket.
+  - If the mailbox wasn't checked that late, the draw works as before (claimed tickets count), and clicking Draw warns first. The pot character's reminder now says when to open the mailbox.
+
+## 2.6.0 - 2026-11-21
+
+- **High Roller: one character, and what you pick up is the build.** The Dicemaster and the list of classes are gone: you press **Play**.
+  - **You're a gangster with a revolver.** The gun fires on its own with steady, predictable damage (no more waiting on doubles), goes through the first enemy it hits, and gains bullets as it levels. Its top upgrade turns it into a Tommy Gun.
+  - **Weapon crates.** One lands near you early in every room. Walk over it and choose one of three new weapons, so you're stronger within the first half-minute. With all four weapon slots full, a crate gives two levels to one you hold.
+  - **Bone Dice are now a weapon you can find,** doubles, floor dice and all.
+  - **Weapon cards show their numbers** ("Damage 12 > 14"), so you can see what a pick buys.
+  - **New talent trees:** Muscle (damage), Grit (survival) and Fortune (luck). Your level and talent points carry over; the points are handed back to spend in the new trees.
+  - A run saved under the old rules can't be continued; start a new one.
+  - **The gun swings round you** to point at what it shoots, and the bullets leave from its muzzle.
+  - **Talents open one below the other:** fill a talent to open the next (the old "3 points per row" rule made the lower rows unreachable).
+  - **Fixed the Magnet:** chips are pulled straight into you, speeding up as they come, instead of hovering and flickering around you.
+  - Luck is now described as crit chance: each point is +1%, and a crit deals 50% more damage.
+  - **Bosses and the Enforcer have far more health** (about three times as much), and the Fire Alarm no longer takes half the Enforcer's health.
+  - **Bosses can't be burst down any more.** Past 5% of a boss's health in one second, only a quarter of the damage gets through, so a strong build is still faster but a boss never melts in a second or two. The Tommy Gun's two extra shots are lighter than its first.
+  - **Two new weapons.** The **Switchblade** leaves a bleed that ticks every half second and stacks on one enemy. The **Molotov** sets the floor on fire under an enemy, burning everything that stands in it (your own fire never hurts you).
+  - **Lifesteal.** A new charm, **The Vig**, heals you for a share of the damage you deal (it trickles in, up to 4% of your health a second).
+  - **The Black Cat is reworked:** it now leaps from enemy to enemy near you, clawing and jinxing each one, instead of wandering across the room.
+  - **A finished build keeps growing.** Once there is nothing left to deal, level-ups offer three boosts that stack for the rest of the run (+4% damage, +3% attack speed, +8 health, +2 Luck) instead of only chips.
+  - Removed the `/gg roller models` experiment.
+
 ## 2.5.0 - 2026-11-21
 
 - **New: High Roller (beta).** A casual survivors game, just for fun, with no gold involved. It plays in its own 800 x 600 window that you can move and resize: type `/gg roller`, or click **High Roller** at the top left of the Arcade tab and then **Play High Roller**.

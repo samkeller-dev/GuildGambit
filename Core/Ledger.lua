@@ -448,6 +448,8 @@ end
 function Mail.PayAll()
     if not Mail.open then ns.Print("Open a mailbox first.") return false end
     if Mail.Busy() then return false end
+    local lot = ns.Lottery
+    if lot and (lot.sending or lot.confirming) then ns.Print("Still sending your lottery ticket mail - try again in a moment.") return false end
     local queue = Mail.Owed()
     if #queue == 0 then ns.Print("You don't owe anyone anything.") return false end
     Mail.queue = queue
