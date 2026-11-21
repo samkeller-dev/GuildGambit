@@ -82,6 +82,25 @@ local function AddStat(g, c)
     if line then c.desc = (c.desc or "") .. "\n|cff20ff20" .. line .. "|r" end
 end
 
+--- What a card does for your suits, and what the Wild Card would copy - written on the card.
+local function AddSuitNote(g, c)
+    if c.kind ~= "weapon" and c.kind ~= "charm" then return end
+    if c.id == "wild" then
+        local src, fires = HR.WildSource(g)
+        if src then
+            c.desc = (c.desc or "") .. "\n|cffffd100Copying now:|r " .. HR.WEAPON[src.id].name
+                .. (fires and "" or " |cffff8040(it has no attack to copy: a plain card is thrown instead)|r")
+        end
+        return
+    end
+    if not c.new or not c.suit then return end
+    local tier = HR.SuitGain(g, c.suit)
+    if tier then
+        c.desc = (c.desc or "") .. ("\n|cffffd100%d %s:|r %s"):format(HR.SUIT_NEED[tier], HR.SUIT_NAME[c.suit], HR.SUIT_BONUS[c.suit][tier])
+        c.suitTier = tier
+    end
+end
+
 local baseOffer = HR.Offer
 --- Level-up cards, now with a rarity each. A card is only marked rare if it really gives more.
 function HR.Offer(g, n, bump)
@@ -113,6 +132,7 @@ function HR.Offer(g, n, bump)
             c.amount = 1
         end
         AddStat(g, c)
+        AddSuitNote(g, c)
     end
     return cards
 end
@@ -121,7 +141,7 @@ end
 -- Weapon crates: one lands near you early in every room. Walk over it and pick one of three
 -- weapons you don't have (or, with every slot full, two levels for one you do).
 ---------------------------------------------------------------------------
-HR.CRATE_AT = 18
+HR.CRATE_AT = 12
 
 function HR.CrateCards(g)
     local pool = {}
@@ -146,7 +166,10 @@ function HR.CrateCards(g)
     end
     local out = {}
     while #out < 3 and #pool > 0 do out[#out + 1] = table.remove(pool, g.rand.i(1, #pool)) end
-    for _, c in ipairs(out) do AddStat(g, c) end
+    for _, c in ipairs(out) do
+        AddStat(g, c)
+        AddSuitNote(g, c)
+    end
     return out
 end
 
@@ -405,7 +428,7 @@ HR.EVENTS = EVENTS
 
 --- Called at the start of each room: furniture, and the timers for events and the mini-boss.
 function HR.RoomExtras(g)
-    g.eventT, g.miniDone, g.table, g.crateDone = 22 + g.rand.f() * 6, nil, nil, nil
+    g.eventT, g.miniDone, g.table, g.crateDone = (22 + g.rand.f() * 6) * HR.WAVE_PACE, nil, nil, nil
     g.sched = {}
     local b = g.bounds
     local cx, cy = (b[1] + b[3]) / 2, (b[2] + b[4]) / 2
@@ -440,12 +463,12 @@ function HR.StepEvents(g, dt)
         local x, y = NearPlayer(g, 240, 270)
         local e = HR.Spawn(g, "enforcer", x, y, { force = true, step = EnforcerStep, mini = true, elite = true })
         e.trait = nil
-        HR.Banner(g, "|cffff8040The Enforcer|r wants a word.", 3)
+        HR.Banner(g, "|cffff8040The Enforcer|r wants a word. Beat him to bring out the boss.", 3.5)
         HR.Event(g, "boss")
     end
     g.eventT = (g.eventT or 15) - dt
     if g.eventT <= 0 and g.roomTime < HR.WAVE_TIME - 10 then
-        g.eventT = 20 + g.rand.f() * 6
+        g.eventT = (20 + g.rand.f() * 6) * HR.WAVE_PACE
         local i = g.rand.i(1, #EVENTS)
         if i == 3 and g.table then i = 1 end
         EVENTS[i](g)
@@ -473,6 +496,11 @@ function HR.OnKill(g, e, wid)
     if e.obj then return end
     HR.Fx(g, "puff", e.x, e.y, 0.3, { size = e.size })
     if e.boss then return end
+    -- the Enforcer is down: the boss is on his way
+    if e.mini and g.phase == "waves" and not g.bossAt then
+        g.bossAt = g.roomTime + HR.BOSS_DELAY
+        HR.Banner(g, "|cffff8040The Enforcer is down.|r The boss is on his way - grab the chest.", HR.BOSS_DELAY)
+    end
     if e.mini or (e.elite and g.rand.chance(0.35)) then
         HR.DropPickup(g, { kind = "chest", x = e.x, y = e.y })
     end

@@ -589,6 +589,14 @@ local function WildSource(g)
     return best
 end
 
+--- What the Wild Card is copying, and whether that weapon has an attack to copy (the orbiting,
+--- aura and chip weapons don't: it throws a plain card in their name instead).
+function HR.WildSource(g)
+    local src = WildSource(g)
+    if not src then return nil end
+    return src, FIRE[src.id] ~= nil and src.id ~= "edge"
+end
+
 WSTEP.wild = function(g, w, dt)
     local src = WildSource(g)
     if not src then return end

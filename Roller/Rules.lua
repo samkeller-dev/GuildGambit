@@ -263,6 +263,44 @@ function HR.Suits(g)
     return n, b
 end
 
+--- The bonus a new piece of `suit` would switch on right now: 1-3 (HR.SUIT_TIER), or nil.
+function HR.SuitGain(g, suit)
+    local n = g.suits and g.suits.n[suit]
+    if not n then return nil end
+    for tier, need in ipairs(HR.SUIT_NEED) do
+        if n + 1 == need then return tier end
+    end
+end
+
+--- The suits explained for this run, for the tooltip and the pause screen. Each entry is
+--- { suit, n, bonuses = { { name, need, text, on }, x3 } }; then what Full House / Full Deck are.
+function HR.SuitInfo(g)
+    HR.Suits(g)
+    local out = { suits = {}, extra = {} }
+    for _, s in ipairs(HR.SUITS) do
+        local n = g.suits.n[s]
+        local row = { suit = s, n = n, bonuses = {} }
+        for tier, need in ipairs(HR.SUIT_NEED) do
+            row.bonuses[tier] = { name = HR.SUIT_TIER[tier], need = need, text = HR.SUIT_BONUS[s][tier], on = n >= need,
+                doubled = tier == 1 and g.suits.fullHouse == s or nil }
+        end
+        out.suits[#out.suits + 1] = row
+    end
+    out.extra[1] = { text = HR.SUIT_EXTRA.fullHouse, on = g.suits.fullHouse ~= nil }
+    out.extra[2] = { text = HR.SUIT_EXTRA.fullDeck, on = g.suits.fullDeck == true }
+    return out
+end
+
+--- Does the player hold what this charm needs to do anything?
+function HR.CharmUsable(g, def)
+    if def.needs and not HR.FindWeapon(g, def.needs) then return false end
+    if def.needsAny then
+        for _, id in ipairs(def.needsAny) do if HR.FindWeapon(g, id) then return true end end
+        return false
+    end
+    return true
+end
+
 ---------------------------------------------------------------------------
 -- Luck and stats
 ---------------------------------------------------------------------------
@@ -284,6 +322,10 @@ function HR.Recalc(g)
         luckyMult = P.luckyMult, bounce = 0, pierce = 0, minRoll = 0, chip = 1, heal = 1, maxhp = P.hp,
         loaded = 0, iframes = P.iframes, jinxDur = 5, jinxAmp = 0.25, lifesteal = 0 }
     local pl = g.pl
+    -- every level past the first
+    local grown = math.max(0, (g.level or 1) - 1)
+    st.dmg = st.dmg + HR.LEVEL_DMG * grown
+    st.atk = st.atk + HR.LEVEL_ATK * grown
     -- charms
     st.minRoll = C("weighted")
     st.atk = st.atk + 0.08 * C("glove")
@@ -299,6 +341,7 @@ function HR.Recalc(g)
     st.bounce = C("marbles")
     st.heal = st.heal + 0.15 * C("helping")
     st.lifesteal = 0.005 * C("vig")
+    st.maxhp = st.maxhp + 10 * C("vest") + (HR.CharmMax(g, "vest") and 10 or 0)
     st.speed = st.speed * (1 + 0.06 * C("shoes"))
     st.loaded = 0.05 * C("shaved")
     -- talents
@@ -706,7 +749,7 @@ function HR.Offer(g, n)
     end
     local types = HR.CharmTypes(g)
     for _, def in ipairs(HR.CHARMS) do
-        if not def.needs or HR.FindWeapon(g, def.needs) then
+        if HR.CharmUsable(g, def) then
             local have = HR.Charm(g, def.id)
             if have > 0 and have < def.max then
                 add({ kind = "charm", id = def.id, title = def.name, sub = ("Charm %d of %d"):format(have + 1, def.max),

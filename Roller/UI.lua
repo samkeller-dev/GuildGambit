@@ -764,7 +764,7 @@ local function DrawHud(g)
     else
         ui.line1:SetText(("%s |cffffd100%d|r    Luck |cff80ff80%d|r%s    Lv |cffd0a0ff%d|r"):format(Icon("chip", 18), floor(g.chips), floor(g.luckNow or 0), heat, g.level))
         local where = HR.ROOMS[g.roomIdx].name
-        if g.phase == "waves" then where = where .. "   |cffffd100" .. Clock(max(0, HR.WAVE_TIME - g.roomTime)) .. "|r" end
+        if g.phase == "waves" then where = where .. "   |cffffd100" .. Clock(max(0, math.min(HR.WAVE_TIME, g.bossAt or HR.WAVE_TIME) - g.roomTime)) .. "|r" end
         ui.line2:SetText(where)
         ui.plate1:SetWidth(HR.Feature("heat") and 330 or 262)
         ui.plate2:Show()
@@ -933,7 +933,7 @@ end
 ---------------------------------------------------------------------------
 local MAX_OPTIONS, MAX_CARDS = 10, 4
 local OPTION_GAP = 4
-local ROW_W, CARD_W, CARD_H = 470, 176, 246
+local ROW_W, CARD_W, CARD_H = 470, 176, 284
 local CARD_KINDS = { level = true, relic = true }
 
 local function CurrentMenu()
@@ -1171,6 +1171,51 @@ function UI.Records()
     UI.AfterChange()
 end
 
+--- The suits tooltip: what you hold, which bonuses are on, and what more pieces would add.
+local function SuitTooltip(owner)
+    local g = ui.g
+    if not g or not GameTooltip then return end
+    local info = HR.SuitInfo(g)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOPRIGHT")
+    GameTooltip:SetText("Suits")
+    GameTooltip:AddLine("Every weapon and every kind of charm you hold is one piece of its suit - the small icon on its card. Collect a suit to switch on its bonuses.", 1, 1, 1, true)
+    for _, row in ipairs(info.suits) do
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(("%s %s   |cffffffffyou hold %d|r"):format(SuitText(row.suit, 16), HR.SUIT_NAME[row.suit], row.n), 1, 0.82, 0)
+        for _, b in ipairs(row.bonuses) do
+            if b.on then
+                GameTooltip:AddLine(("%s: %s%s"):format(b.name, b.text, b.doubled and " (doubled by your Full House)" or ""), 0.13, 1, 0.13, true)
+            else
+                GameTooltip:AddLine(("%s (%d pieces): %s"):format(b.name, b.need, b.text), 0.55, 0.55, 0.55, true)
+            end
+        end
+    end
+    GameTooltip:AddLine(" ")
+    for _, x in ipairs(info.extra) do
+        if x.on then GameTooltip:AddLine(x.text, 0.13, 1, 0.13, true) else GameTooltip:AddLine(x.text, 0.55, 0.55, 0.55, true) end
+    end
+    GameTooltip:Show()
+end
+UI._SuitTooltip = SuitTooltip
+
+--- The same, short, for the pause screen: what's on, and the next step for each suit you hold.
+local function SuitText2(g)
+    local lines = {}
+    local info = HR.SuitInfo(g)
+    for _, row in ipairs(info.suits) do
+        if row.n > 0 then
+            local on, nextUp = {}, nil
+            for _, b in ipairs(row.bonuses) do
+                if b.on then on[#on + 1] = b.text elseif not nextUp then nextUp = b end
+            end
+            lines[#lines + 1] = ("%s |cffffd100%d|r  %s%s"):format(SuitText(row.suit), row.n,
+                #on > 0 and ("|cff20ff20" .. table.concat(on, "; ") .. "|r") or "|cff888888no bonus yet|r",
+                nextUp and ("   |cff888888at %d: %s|r"):format(nextUp.need, nextUp.text) or "")
+        end
+    end
+    return lines
+end
+
 local function BuildText(g)
     local lines = {}
     for _, w in ipairs(g.weapons) do
@@ -1188,6 +1233,8 @@ local function BuildText(g)
         if g.relics[def.id] then relics[#relics + 1] = (def.cursed and "|cffc060ff" or (def.legendary and "|cffff8a00" or "|cffffd100")) .. def.name .. "|r" end
     end
     if #relics > 0 then lines[#lines + 1] = "|cffaaaaaaRelics:|r " .. table.concat(relics, ", ") end
+    lines[#lines + 1] = "|cffaaaaaaSuits (each weapon and charm is one piece of its suit):|r"
+    for _, l in ipairs(SuitText2(g)) do lines[#lines + 1] = l end
     return lines
 end
 
@@ -1733,6 +1780,14 @@ local function BuildHud(canvas)
     ui.weapons:SetPoint("BOTTOMLEFT", 14, 14)
     ui.suits = hud:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     ui.suits:SetPoint("BOTTOMRIGHT", -14, 14)
+    -- hover the suits to read what they are and what yours are doing
+    local tip = CreateFrame("Frame", nil, hud)
+    tip:SetSize(210, 26)
+    tip:SetPoint("BOTTOMRIGHT", -8, 8)
+    tip:EnableMouse(true)
+    tip:SetScript("OnEnter", SuitTooltip)
+    tip:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    ui.suitTip = tip
 end
 
 local function BuildMenus(canvas)
@@ -1941,10 +1996,10 @@ end
 --- its window.
 local TUTORIAL = {
     { head = "Just walk", text = "Move with |cffffd100W A S D|r. That's the only control: your gun fires itself.", pic = "move" },
-    { head = "Stay out of the red", text = "Red on the floor is about to hit. Step out before it fills in. |cffff6a5aA boss's red kills in one hit.|r", pic = "red" },
+    { head = "Stay out of the red", text = "Red on the floor is about to hit. Step out before it fills in. |cffff6a5aA boss's red hits for 127: more than your whole health bar.|r", pic = "red" },
     { head = "Walk over the loot", text = "|cffffd100Chips|r are your score. A |cffffd100crate|r is a new weapon; chests and power-ups make you stronger.", pic = "loot" },
     { head = "Level up, pick a card", text = "The game pauses and deals three cards. Press |cffffd1001|r, |cffffd1002|r or |cffffd1003|r for a new weapon or an upgrade.", pic = "cards" },
-    { head = "A boss every 2 minutes", tall = true, pic = "boss",
+    { head = "Beat the Enforcer, meet the boss", tall = true, pic = "boss",
       text = "Beat it and take a relic. Then choose: |cffffd100go on|r to the next room, or |cffffd100walk away|r and keep your chips.\n|cffff6a5aDie and you keep nothing.|r" },
 }
 

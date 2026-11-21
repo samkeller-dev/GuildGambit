@@ -5,6 +5,20 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.6.2 - 2026-11-21
+
+- **High Roller: bosses come much sooner,** so one turns up within a flight path or boat ride.
+  - **Beat the Enforcer to bring out the boss.** He walks in 30 seconds into a room; the boss follows 4 seconds after he goes down (time to grab his chest). If he's still standing at one minute, the boss comes anyway.
+  - **Every level makes you stronger by itself:** +3% damage and +2% attack speed, on top of the card you pick. Health only comes from cards.
+  - **A boss's floor attack now hits for 127** instead of killing outright. You start with 100 health, so it still kills unless you've built up enough to take one: the Grit health talents and one **Bulletproof Vest** (a new charm, +10 maximum health a copy) leave you on 1 health, and more vests or a shield leave you with more. Rooms are shorter, so there are fewer level-up screens than before.
+  - The waves were 90 seconds before. The weapon crate lands after 12 seconds, and a whole run is now about 5 to 7 minutes.
+- **High Roller: suits are explained.** Every weapon and every kind of charm you hold is one piece of its suit; 2, 3 and 5 pieces of a suit each switch on a bonus.
+  - **Hover the suits** in the bottom right for what you hold, which bonuses are on, and what more pieces would add. The pause screen shows the same in short.
+  - **Cards say what they do for your suits,** e.g. "2 Spades: +15% damage" on a card that would be your second Spade.
+  - **The Wild Card's card names the weapon it would copy,** and warns you when that weapon has no attack to copy.
+  - **Snake Oil is only dealt while you hold the Black Cat or the Magic 8-Ball,** the two weapons that jinx, and its card says so.
+  - Level-up cards are a little taller, so their text fits.
+
 ## 2.6.1 - 2026-11-21
 
 - **Lottery: unpaid tickets no longer get into the draw.** A player could end up with tickets the pot character never got gold for. If their addon was still waiting on a ticket mail and they sent another mail with gold, that mail's "sent" was taken for the ticket mail.

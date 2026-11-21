@@ -6,7 +6,7 @@ ns.version = (GetMeta and GetMeta(ADDON_NAME, "Version")) or "dev"
 
 -- One short line about this version, sent with our hello so guildies on an older version see
 -- why to update. Rewrite it for every release (see VERSIONING.md); keep it under ~100 characters.
-ns.WHATS_NEW = "Lottery fix: unpaid tickets stay out of the draw. High Roller: gangster with a gun. Full changelog on CurseForge."
+ns.WHATS_NEW = "High Roller: beat the Enforcer to bring out the boss, and hover the suits to see what they do. /gg roller. Full changelog on CurseForge."
 -- true to add a separate "see the full changelog on CurseForge" line (not needed when WHATS_NEW says so)
 ns.WHATS_NEW_BIG = false
 

@@ -362,7 +362,7 @@ function HR.Kill(g, e, wid)
         g.streakKills = (g.streakKills or 0) + 1
         if e.elite then g.roomElites = (g.roomElites or 0) + 1 end
         -- experience
-        g.xp = g.xp + (e.xp or 0)
+        g.xp = g.xp + (e.xp or 0) * HR.XP_RATE
         -- chips
         if not e.boss and (e.elite or g.rand.chance(0.4)) then
             local v = (e.elite and 10 or g.rand.i(1, 2)) * g.diff
@@ -631,9 +631,10 @@ function HR.InShape(z, x, y)
 end
 
 --- An enemy attack: drawn on the floor for `warn` seconds, then it lands. dur > 0: it stays.
--- In a boss fight every one of them kills outright (z.lethal): they're always drawn first, so
--- being caught is a mistake you could see coming. Shields and the Rabbit's Foot still save you.
-HR.LETHAL = 99999
+-- In a boss fight every one of them hits for HR.BOSS_HIT (z.lethal) - the whole of the health you
+-- start with: they're always drawn first, so being caught is a mistake you could see coming.
+-- More maximum health, a shield or the Rabbit's Foot can carry you through one.
+HR.LETHAL = 99999 -- (a blow nothing survives without a save; the tests use it)
 
 function HR.Danger(g, z)
     z.side, z.total = "e", z.warn
@@ -657,7 +658,7 @@ local function StepZones(g, dt)
             z.warn = z.warn - dt
             if z.warn <= 0 then
                 if z.side == "e" then
-                    if HR.InShape(z, pl.x, pl.y) then HR.Hurt(g, z.lethal and HR.LETHAL or z.dmg or 10, z.name) end
+                    if HR.InShape(z, pl.x, pl.y) then HR.Hurt(g, z.lethal and HR.BOSS_HIT or z.dmg or 10, z.name) end
                     if z.onFire then z.onFire(g, z) end
                     z.flash = 0.25
                 end
@@ -669,7 +670,7 @@ local function StepZones(g, dt)
                 z.tick = (z.tick or 0) - dt
                 if z.tick <= 0 and HR.InShape(z, pl.x, pl.y) then
                     z.tick = 0.5
-                    HR.Hurt(g, z.lethal and HR.LETHAL or z.dmg or 10, z.name)
+                    HR.Hurt(g, z.lethal and HR.BOSS_HIT or z.dmg or 10, z.name)
                 end
             elseif z.side == "p" then
                 z.tick = (z.tick or 0) - dt
@@ -1070,7 +1071,11 @@ function HR.TakeCard(g, card)
         HR.Banner(g, "|cffffd100Cash Out: " .. card.title .. "!|r", 3)
         HR.Event(g, "bigwin")
     elseif card.kind == "charm" then
+        local had = g.st.maxhp
         g.charms[card.id] = min(HR.CHARM[card.id].max, (g.charms[card.id] or 0) + (card.amount or 1))
+        -- health a charm adds comes filled
+        HR.Recalc(g)
+        if g.st.maxhp > had and g.st.heal > 0 and not g.noHeal then g.pl.hp = min(g.st.maxhp, g.pl.hp + (g.st.maxhp - had)) end
     elseif card.kind == "boost" then
         g.boosts = g.boosts or {}
         g.boosts[card.id] = (g.boosts[card.id] or 0) + 1
@@ -1107,7 +1112,9 @@ local function LevelMenu(g)
     local bump = 0
     if (g.ticket or 0) > 0 then bump, g.ticket = 1, g.ticket - 1 end
     local cards = HR.Offer(g, nil, bump)
-    local m = { kind = "level", title = ("Level %d"):format(g.level), sub = "Pick a card", options = {} }
+    local m = { kind = "level", title = ("Level %d"):format(g.level),
+        sub = ("|cff20ff20+%d%% damage and +%d%% attack speed for the level.|r  Now pick a card:"):format(HR.LEVEL_DMG * 100 + 0.5,
+            HR.LEVEL_ATK * 100 + 0.5), options = {} }
     for i, c in ipairs(cards) do
         m.options[i] = { key = tostring(i), title = c.title, sub = c.sub, desc = c.desc, hint = c.hint, suit = c.suit, icon = c.icon,
             link = c.link, card = c, rar = c.rar, pick = function() HR.TakeCard(g, c) end }
@@ -1136,6 +1143,8 @@ local function CheckLevel(g)
     if g.xp >= need then
         g.xp = g.xp - need
         g.level = g.level + 1
+        -- the level itself: a little damage and attack speed
+        HR.Recalc(g)
         LevelMenu(g)
         if g.level % 4 == 0 then HR.Taunt(g, "levelup") end
     end
@@ -1242,7 +1251,7 @@ function HR.StartRoom(g, pos, restoring)
     ClearField(g)
     g.bounds = { 0, 0, HR.ROOM_W, HR.ROOM_H }
     g.pl.x, g.pl.y = HR.ROOM_W / 2, HR.ROOM_H / 2
-    g.roomTime, g.spawnT, g.phase = 0, 0.5, "waves"
+    g.roomTime, g.spawnT, g.phase, g.bossAt = 0, 0.5, "waves", nil
     g.roomHits, g.roomKills, g.roomElites, g.waveKills = 0, 0, 0, nil
     g.roomWeapons, g.roomChipLog, g.pickedEarly, g.folded = {}, {}, nil, nil
     g.bet, g.betResult, g.boss, g.bossText, g.luckDrain = nil, nil, nil, nil, nil
@@ -1269,7 +1278,7 @@ local function SpawnWave(g)
     local room = HR.ROOMS[g.roomIdx]
     local kinds, weights = {}, {}
     for _, m in ipairs(room.mix) do
-        if g.roomTime >= m[3] then kinds[#kinds + 1], weights[#weights + 1] = m[1], m[2] end
+        if g.roomTime >= m[3] * HR.WAVE_PACE then kinds[#kinds + 1], weights[#weights + 1] = m[1], m[2] end
     end
     local kind = kinds[g.rand.weighted(weights) or 1]
     local def = HR.ENEMIES[kind]
@@ -1564,7 +1573,7 @@ function HR.Step(g, dt)
             g.spawnT = (0.68 - 0.40 * f) / (g.rule == "happy" and 1.5 or 1)
             SpawnWave(g)
         end
-        if g.roomTime >= HR.WAVE_TIME then
+        if g.roomTime >= HR.WAVE_TIME or (g.bossAt and g.roomTime >= g.bossAt) then
             HR.StartBoss(g)
             Camera(g)
             return

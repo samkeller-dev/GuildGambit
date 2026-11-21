@@ -14,7 +14,21 @@ HR.STEP = 1 / 30                     -- fixed simulation step
 -- between rooms. (The tests switch them on to keep the code exercised.)
 HR.BETS_ON = false
 HR.BOSS_GATE = 0.05                  -- the share of a boss's health that full damage can take in one second
-HR.WAVE_TIME = 90                    -- seconds of waves before a room's boss
+HR.WAVE_TIME = 60                    -- seconds of waves before a room's boss (short: it's played on flight paths)
+-- The rooms were first tuned for 90 seconds of waves: the "from second" times in HR.ROOMS are
+-- squeezed to fit the shorter ones.
+HR.WAVE_PACE = HR.WAVE_TIME / 90
+-- The Enforcer walks in halfway. Killing him brings the boss out a few seconds later (time to grab
+-- his chest); WAVE_TIME is only the latest the boss can come.
+HR.BOSS_DELAY = 4
+-- Experience is paid as it always was, so the shorter rooms mean fewer level-up screens (faster
+-- experience was tried and was too much clicking). Instead every level makes you stronger by itself.
+HR.XP_RATE = 1
+-- per level past the first: +3% damage, +2% attack speed. (No health: that only comes from cards.)
+HR.LEVEL_DMG, HR.LEVEL_ATK = 0.03, 0.02
+-- A boss's floor attack takes this much. It's set so that the three Grit health talents (+18)
+-- and one Bulletproof Vest (+10) leave you standing on exactly 1 health: 100 + 18 + 10 - 127.
+HR.BOSS_HIT = 127
 HR.MAX_WEAPONS, HR.MAX_CHARM_TYPES = 4, 5
 HR.WEAPON_MAX = 5
 HR.CAPS = { enemies = 100, shots = 120, eshots = 40, pickups = 100, special = 12, zones = 40, texts = 24 }
@@ -22,6 +36,21 @@ HR.CAPS = { enemies = 100, shots = 120, eshots = 40, pickups = 100, special = 12
 HR.SUITS = { "S", "H", "D", "C" }
 HR.SUIT_NAME = { S = "Spades", H = "Hearts", D = "Diamonds", C = "Clubs", J = "Joker" }
 HR.SUIT_COLOR = { S = "ffc8c8ff", H = "ffff5a5a", D = "ffffb040", C = "ff8fe08f", J = "ffe080ff" }
+-- Suits: every weapon and every kind of charm you hold is one piece of its suit. Two, three and
+-- five pieces of a suit each switch on a bonus (what they do lives in Rules.Recalc and the engine;
+-- these are the words for them).
+HR.SUIT_NEED = { 2, 3, 5 }
+HR.SUIT_TIER = { "Pair", "Three of a Kind", "Flush" }
+HR.SUIT_BONUS = {
+    S = { "+15% damage", "crits deal double", "ordinary enemies under 20% health die outright" },
+    H = { "heal 1 every 10 kills", "healing past full health becomes a shield", "a full shield pulses damage around you" },
+    D = { "+5 Luck", "rare cards twice as likely", "every chip flies to you" },
+    C = { "your hits knock enemies back", "+40% damage to stunned or slowed enemies", "stuns last twice as long and work on elites" },
+}
+HR.SUIT_EXTRA = {
+    fullHouse = "Full House (3 or more of one suit, exactly 2 of another): the pair's bonus is doubled.",
+    fullDeck = "Full Deck (2 or more of every suit): dice and other rolls can't land low.",
+}
 HR.SUIT_TINT = { S = { 0.62, 0.62, 1 }, H = { 1, 0.4, 0.4 }, D = { 1, 0.72, 0.25 }, C = { 0.5, 0.9, 0.5 } }
 
 ---------------------------------------------------------------------------
@@ -53,7 +82,7 @@ HR.WEAPONS = {
     { id = "bonedice", name = "Bone Dice", suit = "S", tags = { roll = true, bounce = true }, icon = "die6", dmgLabel = "Damage per pip",
       cd = { 1.2, 1.2, 1.0, 1.0, 0.9 }, dmg = { 2.2, 2.8, 3.2, 3.6, 4.2 }, n = { 2, 2, 2, 3, 3 }, bounce = { 1, 2, 2, 2, 2 },
       chain = { 3, 3, 3, 3, 4 },
-      desc = "Throws dice; damage is the face. Doubles throw again. Walk over a good die to keep it for your next throw.",
+      desc = "Throws dice; damage is the face. Doubles throw again. Walk over a good die to keep it.",
       lv = { "", "+damage, +1 bounce", "+damage, throws faster", "+damage, a third die", "+damage, longer chains" },
       evo = { name = "Natural Roller", need = "weighted", desc = "Sixes explode and are rolled again." } },
     { id = "flick", name = "Flick", suit = "C", soon = true, tags = { card = true }, icon = "card",
@@ -87,7 +116,7 @@ HR.WEAPONS = {
     -- Clubs
     { id = "cat", name = "Black Cat", suit = "C", tags = { jinx = true, summon = true, bounce = true }, icon = "cat",
       cd = { 2.4, 2.2, 2.0, 1.8, 1.6 }, dmg = { 9, 11, 14, 17, 21 }, n = { 1, 1, 2, 2, 3 }, pounce = { 3, 4, 4, 5, 6 },
-      desc = "A cat leaps from enemy to enemy, clawing each one and jinxing it: a jinxed enemy takes 25% more damage from everything.",
+      desc = "Leaps from enemy to enemy, clawing and jinxing each. A jinxed enemy takes 25% more damage.",
       lv = { "", "+damage, faster, one more leap", "+damage, a second cat", "+damage, faster, one more leap", "+damage, a third cat, one more leap" },
       evo = { name = "Nine Lives", need = "rabbit", desc = "The cat saves you from one death each room." } },
     { id = "ball8", name = "Magic 8-Ball", suit = "C", tags = { orbit = true, roll = true, jinx = true }, icon = "ball8",
@@ -134,19 +163,19 @@ HR.WEAPONS = {
       evo = { name = "Golden Goose", need = "insurance", desc = "Each burst also drops a heart." } },
     { id = "blade", name = "Switchblade", suit = "H", tags = { bleed = true }, icon = "knife",
       cd = { 1.4, 1.3, 1.2, 1.1, 1.0 }, dmg = { 6, 7, 9, 11, 13 }, n = { 1, 1, 1, 2, 2 }, bleed = { 4, 5, 6, 8, 10 }, stacks = { 3, 3, 4, 4, 5 },
-      desc = "Throws a knife that leaves a bleed: damage every half second for 4 seconds. Bleeds stack 3 times on one enemy.",
+      desc = "Throws a knife that leaves a bleed for 4 seconds. Bleeds stack 3 times.",
       lv = { "", "+damage, faster, a deeper bleed", "+damage, bleeds stack 4 times", "+damage, a second knife", "+damage, bleeds stack 5 times" },
       evo = { name = "Bloodbath", need = "vig", desc = "An enemy that dies bleeding passes its bleed to three more." } },
     -- (more Clubs)
     { id = "molotov", name = "Molotov", suit = "C", tags = { zone = true, burn = true }, icon = "molotov",
       cd = { 3.6, 3.4, 3.2, 3.0, 2.8 }, dmg = { 5, 6, 8, 10, 12 }, n = { 1, 1, 1, 2, 2 }, r = { 38, 42, 46, 50, 56 }, dur = { 3, 3, 3.5, 3.5, 4 },
-      desc = "Sets the floor on fire under an enemy for 3 seconds. Everything standing in the flames burns.",
+      desc = "Sets the floor on fire under an enemy. Everything standing in it burns.",
       lv = { "", "+damage, a wider fire", "+damage, wider, burns longer", "+damage, wider, a second bottle", "+damage, wider, burns longer" },
       evo = { name = "Wildfire", need = "chalk", desc = "Enemies keep burning for 3 seconds after they leave the flames." } },
     -- Joker
     { id = "wild", name = "Wild Card", suit = "J", tags = { card = true }, icon = "suit_j", ach = "sevens",
       mult = { 0.5, 0.55, 0.6, 0.65, 0.75 },
-      desc = "Copies your highest-level weapon at half strength. Counts as your best suit.",
+      desc = "Fires your highest-level other weapon again at half strength. Counts toward your biggest suit.",
       lv = { "", "a stronger copy", "a stronger copy", "a stronger copy", "a stronger copy" },
       evo = { name = "Joker's Wild", need = "flush", desc = "Copies at full strength." } },
 }
@@ -155,7 +184,7 @@ for _, w in ipairs(HR.WEAPONS) do HR.WEAPON[w.id] = w end
 
 ---------------------------------------------------------------------------
 -- Charms: stacking passives. What each does lives in Rules.Recalc and the engine.
--- needs: only dealt while you hold that weapon.
+-- needs: only dealt while you hold that weapon. needsAny: while you hold any of these.
 ---------------------------------------------------------------------------
 HR.CHARMS = {
     { id = "weighted", name = "Weighted Die", suit = "S", max = 3, desc = "Your lowest possible roll +1.", top = "Rolls can't land in the bottom half." },
@@ -163,7 +192,8 @@ HR.CHARMS = {
     { id = "pokerface", name = "Poker Face", suit = "S", max = 4, desc = "+10% damage at full health.", top = "Also while shielded." },
     { id = "gambler", name = "Gambler's Charm", suit = "S", max = 4, desc = "Crits deal +25% damage.", top = "Crits can't be dodged." },
     { id = "nail", name = "Lucky Nail", suit = "C", max = 3, desc = "Your shots pierce one more enemy.", top = "Pierced enemies are knocked back." },
-    { id = "snakeoil", name = "Snake Oil", suit = "C", max = 3, desc = "A jinxed enemy's death jinxes one more.", top = "Spread jinxes are stronger." },
+    { id = "snakeoil", name = "Snake Oil", suit = "C", max = 3, needsAny = { "cat", "ball8" },
+      desc = "A jinxed enemy's death passes the jinx to one more. (The Black Cat and Magic 8-Ball jinx.)", top = "Spread jinxes are stronger." },
     { id = "chalk", name = "Chalk", suit = "C", max = 4, desc = "Zones and auras 12% bigger.", top = "They slow." },
     { id = "watch", name = "Pocket Watch", suit = "C", max = 3, desc = "+0.2s of safety after a hit.", top = "Enemies slow briefly when you're low." },
     { id = "fourleaf", name = "Four-Leaf Clover", suit = "D", max = 4, desc = "+4 Luck.", top = "One roll in five is made twice." },
@@ -173,6 +203,7 @@ HR.CHARMS = {
     { id = "rabbit", name = "Rabbit's Foot", suit = "H", max = 2, desc = "Survive one killing blow per run.", top = "Each save heals you to half." },
     { id = "insurance", name = "Insurance", suit = "H", max = 3, desc = "15% of a big hit is refunded over 5s.", top = "A full refund leaves a shield." },
     { id = "helping", name = "Second Helping", suit = "H", max = 4, desc = "Healing 15% stronger.", top = "Healing at full health boosts damage." },
+    { id = "vest", name = "Bulletproof Vest", suit = "H", max = 4, desc = "+10 maximum health.", top = "+10 more: 50 in all." },
     { id = "vig", name = "The Vig", suit = "H", max = 4, desc = "Lifesteal: heal for 0.5% of the damage you deal.", top = "Crits steal twice as much." },
     { id = "shoes", name = "Comfy Shoes", suit = "H", max = 4, desc = "+6% move speed.", top = "Standing still gives a small shield." },
     { id = "shaved", name = "Shaved Dice", suit = "S", max = 4, needs = "bonedice", desc = "+5% Loaded: more doubles.", top = "A triple can chain." },
@@ -309,7 +340,7 @@ HR.TALENTS = {
             { id = "hm3", max = 2, desc = "Crits deal +15% damage." },
             { id = "hm4", max = 2, desc = "Blasts, auras and orbits are 6% bigger." },
             { id = "hm5", max = 1, name = "Packing Heat", desc = "Your revolver starts each run at level 2." } } },
-        { name = "Grit", tip = "Staying alive: more health, quicker feet, and a longer moment of safety after a hit. None of it saves you from a boss's red.", rows = {
+        { name = "Grit", tip = "Staying alive: more health, quicker feet, and a longer moment of safety after a hit. A boss's red hits for 127: with this tree's health and one Bulletproof Vest you live through one, just.", rows = {
             { id = "hg1", max = 3, desc = "+6 maximum health." },
             { id = "hg2", max = 2, desc = "+4% move speed." },
             { id = "hg3", max = 2, desc = "+0.1s of safety after a hit." },
@@ -364,7 +395,7 @@ HR.TAUNTS = {
 HR.TIPS = {
     "Move with WASD or the arrow keys. Your weapons fire on their own.",
     "Gold chips are your score. Enemies drop them; walk away after a boss to keep them.",
-    "A boss's red floor markings kill in one hit. Step out before they fill in.",
+    "A boss's red floor markings hit for 127: more than your whole health bar. Step out before they fill in.",
     "A weapon crate holds a new weapon. Walk over it.",
     "A level-up deals you cards: press 1, 2 or 3. F folds for Luck.",
 }
