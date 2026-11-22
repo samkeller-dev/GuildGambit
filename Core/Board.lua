@@ -1,6 +1,16 @@
 -- Board.lua: guild leaderboard. Each client works out its own stats from its ledger (real
 -- games, plus the guild lottery's net gold and wagered; no practice, no payments) and shares
 -- them on the guild addon channel.
+--
+-- How everyone agrees on the rows:
+--   * a player's own addon is the only source of their row. It stamps the row with the (server)
+--     time its numbers last changed ("at"), and sends it to the guild on every change and to
+--     each guildie who logs in;
+--   * that alone only reaches whoever is online at the same time, so every addon also passes
+--     on the rows it holds: on login an addon tells the guild which rows it has and how new
+--     (BSUM), anyone holding a newer one broadcasts it (BROW), and anyone holding an older one
+--     asks for it (BWANT). The newest stamp always wins, so every board ends up the same.
+--   Rows are only passed on within the same season, and nobody takes their own row from others.
 -- Stored per guild in account-wide saved variables, so it survives reloads and alts.
 local ADDON_NAME, ns = ...
 local Comm, Compat = ns.Comm, ns.Compat
@@ -41,19 +51,39 @@ function Board.ApplySeason(t, password)
     if not t or type(password) ~= "string" or ns.SHA256(password) ~= Board.RESET_FINGERPRINT then return false end
     local current = Board.Season()
     if current and current.t >= t then return false end
-    ns.db.seasons[GuildKey()] = { t = t, k = password, localStart = time() }
+    -- (the season starts when it was reset, even if we only hear of it later: games we've
+    -- played since still count, exactly as they do for everyone who heard at once)
+    ns.db.seasons[GuildKey()] = { t = t, k = password, localStart = math.min(time(), t) }
     ns.db.board = ns.db.board or {}
     ns.db.board[GuildKey()] = {}
-    -- a reset wipes the slate: every open debt on this client is cleared too
+    Board.ClearForSeason(t)
+    Board.Changed() -- re-adds our own (now empty) row and re-broadcasts it
+    return true
+end
+
+--- A reset wipes the slate: every debt on THIS character from before the reset is cleared, and
+--- gold mailed before it no longer counts. Debts made after the reset stay - the other player
+--- still has them. The season is saved per account but ledgers are per character, so each
+--- character does this for itself (Board.CatchUp, at login).
+function Board.ClearForSeason(t)
     for _, e in ipairs(ns.charDB.ledger) do
-        if not e.settled then
+        if not e.settled and (e.time or 0) <= t then
             e.settled = true
             e.clearedByReset = t
         end
     end
-    ns.charDB.clearedAll = ns.Ledger.Now()
-    ns.Ledger.DropPendingMail(nil)
-    Board.Changed() -- re-adds our own (now empty) row and re-broadcasts it
+    local at = math.min(ns.Ledger.Now(), t)
+    ns.charDB.clearedAll = math.max(ns.charDB.clearedAll or 0, at)
+    ns.Ledger.DropPendingMail(nil, at)
+    ns.charDB.seasonT = t
+end
+
+--- At login: this character hasn't cleared its debts for the account's current season yet
+--- (the reset reached another of our characters first).
+function Board.CatchUp()
+    local s = Board.Season()
+    if not s or not ns.charDB or (ns.charDB.seasonT or 0) >= s.t then return false end
+    Board.ClearForSeason(s.t)
     return true
 end
 
@@ -78,7 +108,33 @@ Comm.On("SEASON", function(f, sender)
     if Board.ApplySeason(f.t, f.k) then
         ns.Log("%s reset the leaderboard and cleared all debts - a new season starts now!", ns.Short(sender))
         Board.Send(nil)
+        C_Timer.After(3, function() Board.SendDigest() end) -- (and fetch the new season's rows)
     end
+end)
+
+-- Seasons only used to pass from players already online to someone logging in. Now any
+-- message that shows the two of us are in different seasons settles it: whoever has the newer
+-- one sends it (it carries its own proof), whoever has the older one asks for it.
+local seasonTold = {} -- name -> GetTime() we last sent / asked
+local function SeasonMismatch(theirs, sender)
+    theirs = tonumber(theirs)
+    local mine = Board.Season()
+    mine = mine and mine.t or 0
+    if not theirs or theirs == mine then return false end
+    local key = (ns.Full(sender) or sender):lower()
+    if GetTime() - (seasonTold[key] or -1e9) >= 60 then
+        seasonTold[key] = GetTime()
+        if mine > theirs then Board.SendSeason(sender) else Comm.Send("SASK", {}, sender) end
+    end
+    return true
+end
+Board.SeasonMismatch = SeasonMismatch
+
+Comm.On("SASK", function(f, sender)
+    local key = (ns.Full(sender) or sender):lower() .. "|ask"
+    if GetTime() - (seasonTold[key] or -1e9) < 30 then return end
+    seasonTold[key] = GetTime()
+    Board.SendSeason(sender)
 end)
 
 --- My stats from the ledger (this season's real games only).
@@ -125,19 +181,30 @@ function Board.CleanSelf()
     end
 end
 
-local function Store(name, s)
-    local t = Board.Table()
-    if ns.IsMe(name) then
-        name = ns.Me()
-        Board.CleanSelf()
-    end
-    t[name] = {
+local function Row(s, at)
+    return {
         net = tonumber(s.net) or 0, games = tonumber(s.games) or 0, wins = tonumber(s.wins) or 0,
         losses = tonumber(s.losses) or 0, best = tonumber(s.best) or 0, wagered = tonumber(s.wagered) or 0,
         streak = tonumber(s.streak) or 0, drop = tonumber(s.drop) or 0,
         arcade = tonumber(s.arcade) or 0, char = s.char,
         race = s.race, sex = tonumber(s.sex), seen = time(),
+        at = tonumber(at) or 0, -- when its owner's numbers last changed: the newest wins
     }
+end
+
+local SAME = { "net", "games", "wins", "losses", "best", "wagered", "streak", "drop", "arcade", "char", "race", "sex" }
+local function SameNumbers(a, b)
+    for _, k in ipairs(SAME) do if a[k] ~= b[k] then return false end end
+    return true
+end
+
+local function Store(name, s, at)
+    local t = Board.Table()
+    if ns.IsMe(name) then
+        name = ns.Me()
+        Board.CleanSelf()
+    end
+    t[name] = Row(s, at)
 end
 
 local function Fields(s)
@@ -146,17 +213,33 @@ local function Fields(s)
         r = s.race or "", x = s.sex or 0 }
 end
 
+--- When my own numbers last changed (remembered per character, so logging in doesn't make an
+--- unchanged row look new).
+local function MyAt(s)
+    local sig = Comm.Encode("S", Fields(s))
+    if ns.charDB.boardSig ~= sig or not ns.charDB.boardAt then
+        ns.charDB.boardSig, ns.charDB.boardAt = sig, ns.Ledger.Now()
+    end
+    return ns.charDB.boardAt
+end
+
 --- Sends my stats to the guild (or one player).
 function Board.Send(target)
     local s = Board.MyStats()
-    Store(ns.Me(), s)
-    Comm.Send("STATS", Fields(s), target)
+    local at = MyAt(s)
+    Store(ns.Me(), s, at)
+    local f = Fields(s)
+    f.v = at
+    local season = Board.Season()
+    f.s = season and season.t or 0 -- (which season these numbers are for)
+    Comm.Send("STATS", f, target)
 end
 
 local pending = false
 --- Call after anything that changes my stats; broadcasts once a few seconds later.
 function Board.Changed()
-    Store(ns.Me(), Board.MyStats())
+    local mine = Board.MyStats()
+    Store(ns.Me(), mine, MyAt(mine))
     if ns.UI then ns.UI.Refresh() end
     if pending then return end
     pending = true
@@ -208,9 +291,185 @@ function Board.BiggestDrop()
     return who, best > 0 and best or nil
 end
 
-Comm.On("STATS", function(f, sender)
-    Store(sender, { net = f.n, games = f.g, wins = f.w, losses = f.l, best = f.b, wagered = f.t,
+local function FromFields(f)
+    return { net = f.n, games = f.g, wins = f.w, losses = f.l, best = f.b, wagered = f.t,
         streak = f.k, drop = f.d, arcade = f.ar, char = f.ac ~= "" and f.ac or nil,
-        race = f.r ~= "" and f.r or nil, sex = f.x })
+        race = f.r ~= "" and f.r or nil, sex = f.x }
+end
+
+-- A player's own row, from that player: always taken.
+Comm.On("STATS", function(f, sender)
+    -- numbers from another season aren't this season's (an older addon doesn't say: taken as before)
+    if f.s and SeasonMismatch(f.s, sender) then return end
+    local s = FromFields(f)
+    local at = tonumber(f.v)
+    if not at then
+        -- an older addon doesn't stamp its row: it's as new as when we first heard these numbers
+        local cur = Board.Table()[ns.Full(sender) or sender]
+        at = (cur and SameNumbers(cur, Row(s)) and cur.at) or ns.Ledger.Now()
+    end
+    Store(sender, s, at)
+    if ns.UI then ns.UI.Refresh() end
+end)
+
+---------------------------------------------------------------------------
+-- Passing rows on, so every board agrees (see the top of the file).
+-- All of it waits behind game messages, and goes out one row a second.
+---------------------------------------------------------------------------
+Board.DIGEST_DELAY = 10                 -- seconds after our hello before we compare boards
+Board.ANSWER_MIN, Board.ANSWER_SPREAD = 3, 10 -- answer a comparison 3-12s later (each addon its own moment)
+Board.AIR_EVERY = 1                     -- seconds between rows we broadcast
+Board.AIRED_FOR = 15                    -- a row broadcast this recently isn't broadcast again
+
+local function SeasonT()
+    local s = Board.Season()
+    return s and s.t or 0
+end
+
+-- rows worth passing on: anyone who shows on a list
+local function Shown(r)
+    return (r.games or 0) > 0 or (tonumber(r.wagered) or 0) > 0 or (r.arcade or 0) > 0
+end
+
+-- an owner who is online sends their own row: no need to pass it on
+local function OwnerOnline(name)
+    return ns.Guild and ns.Guild.IsOnline(name) == true
+end
+
+local function Hash(s)
+    local h = 0
+    for i = 1, #s do h = (h * 31 + s:byte(i)) % 65521 end
+    return h
+end
+
+local function Batched(items, fn)
+    local cur = ""
+    for _, item in ipairs(items) do
+        if cur ~= "" and #cur + #item + 1 > 180 then fn(cur) cur = "" end
+        cur = cur == "" and item or (cur .. ";" .. item)
+    end
+    fn(cur) -- (an empty list still says "I have nothing")
+end
+
+--- Tells the guild which rows we hold and how new each is.
+function Board.SendDigest()
+    if not (ns.db and ns.charDB) then return end
+    Board.CleanSelf()
+    local items = {}
+    for name, r in pairs(Board.Table()) do
+        if not ns.IsMe(name) and Shown(r) and not name:find("[:;]") then
+            items[#items + 1] = name .. ":" .. (r.at or 0)
+        end
+    end
+    table.sort(items)
+    local season = SeasonT()
+    Batched(items, function(part) Comm.Send("BSUM", { s = season, b = part }, nil) end)
+end
+
+Board.aired = {}   -- name -> { at, t }: rows somebody broadcast a moment ago
+Board.outbox = {}  -- names of rows we're about to broadcast, in order
+Board.queued = {}  -- name -> true while it's in the outbox
+local airing = false
+
+local function AiredLately(name, at)
+    local a = Board.aired[name]
+    return a ~= nil and a.at >= at and GetTime() - a.t < Board.AIRED_FOR
+end
+
+local function AirNext()
+    while Board.outbox[1] do
+        local name = table.remove(Board.outbox, 1)
+        Board.queued[name] = nil
+        local r = Board.Table()[name]
+        if r and not ns.IsMe(name) and not AiredLately(name, r.at or 0) then
+            local f = Fields(r)
+            f.o, f.v, f.s = name, r.at or 0, SeasonT()
+            Board.aired[name] = { at = r.at or 0, t = GetTime() }
+            Comm.Send("BROW", f, nil)
+            C_Timer.After(Board.AIR_EVERY, AirNext)
+            return
+        end
+    end
+    airing = false
+end
+
+--- Queues one of the rows we hold for a broadcast to the guild.
+local function Air(name)
+    if Board.queued[name] then return end
+    Board.queued[name] = true
+    Board.outbox[#Board.outbox + 1] = name
+    if airing then return end
+    airing = true
+    -- (a moment of our own first, so two addons answering together don't send in step)
+    C_Timer.After(Hash(ns.Me() or "") % 20 / 20, AirNext)
+end
+
+-- What `sender` holds (d: name -> at), once their whole list is in: broadcast what we have
+-- newer, ask them for what they have newer.
+local function Answer(sender, d)
+    local t, me = Board.Table(), ns.Me() or ""
+    local offers, wants = {}, {}
+    for name, r in pairs(t) do
+        if not ns.IsMe(name) and not ns.SameName(name, sender) and Shown(r) and not OwnerOnline(name)
+            and (r.at or 0) > (d[name] or -1) then
+            offers[#offers + 1] = name
+        end
+    end
+    for name, at in pairs(d) do
+        local r = t[name]
+        if not ns.IsMe(name) and not OwnerOnline(name) and (not r or (r.at or 0) < at) then wants[#wants + 1] = name end
+    end
+    -- each addon in its own order, so two answering at once don't broadcast the same rows first
+    table.sort(offers, function(a, b)
+        local ha, hb = Hash(a .. me), Hash(b .. me)
+        if ha ~= hb then return ha < hb end
+        return a < b
+    end)
+    for _, name in ipairs(offers) do Air(name) end
+    if #wants > 0 then
+        table.sort(wants)
+        local season = SeasonT()
+        Batched(wants, function(part) Comm.Send("BWANT", { s = season, b = part }, sender) end)
+    end
+end
+
+Board.lists = {} -- sender -> { d = { name -> at }, gen } while their list is still arriving
+
+Comm.On("BSUM", function(f, sender, channel)
+    if channel ~= "GUILD" then return end
+    if Board.SeasonMismatch(f.s, sender) or tonumber(f.s) ~= SeasonT() then return end
+    local job = Board.lists[sender] or { d = {}, gen = 0 }
+    Board.lists[sender] = job
+    for name, at in (f.b or ""):gmatch("([^:;]+):(%d+)") do job.d[name] = tonumber(at) end
+    job.gen = job.gen + 1
+    local gen = job.gen
+    local wait = Board.ANSWER_MIN + Hash((ns.Me() or "") .. sender) % Board.ANSWER_SPREAD
+    C_Timer.After(wait, function()
+        if Board.lists[sender] ~= job or job.gen ~= gen then return end -- more of the list came in
+        Board.lists[sender] = nil
+        if ns.db and ns.charDB then Answer(sender, job.d) end
+    end)
+end)
+
+-- someone holds an older copy of these rows than we told the guild we have
+Comm.On("BWANT", function(f)
+    if tonumber(f.s) ~= SeasonT() then return end
+    local t = Board.Table()
+    for name in (f.b or ""):gmatch("[^;]+") do
+        if t[name] and not ns.IsMe(name) then Air(name) end
+    end
+end)
+
+-- somebody else's row, passed on: taken only if it's newer than ours
+Comm.On("BROW", function(f, sender, channel)
+    if channel ~= "GUILD" or tonumber(f.s) ~= SeasonT() then return end
+    local at = tonumber(f.v)
+    local owner = type(f.o) == "string" and f.o ~= "" and (ns.Full(f.o) or f.o) or nil
+    if not at or not owner or ns.IsMe(owner) or ns.SameName(owner, sender) then return end
+    local a = Board.aired[owner]
+    if not a or a.at <= at then Board.aired[owner] = { at = at, t = GetTime() } end
+    local cur = Board.Table()[owner]
+    if cur and (cur.at or 0) >= at then return end
+    Store(owner, FromFields(f), at)
     if ns.UI then ns.UI.Refresh() end
 end)

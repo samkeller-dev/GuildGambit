@@ -10,14 +10,39 @@ Ledger.DEDUP_WINDOW = 6 * 3600 -- a result for the same game and player within t
 
 --- The game result already on the ledger for this game id and opponent, if any (recent only:
 --- ids are short and could in theory come round again in a later session).
-function Ledger.FindGame(id, opponent)
+--- window: how far back to look (default DEDUP_WINDOW; a result that arrives days late looks further).
+function Ledger.FindGame(id, opponent, window)
     if not id or not opponent then return nil end
     local list = ns.charDB.ledger
     local now = time()
     for i = #list, 1, -1 do
         local e = list[i]
-        if now - (e.time or 0) > Ledger.DEDUP_WINDOW then break end
+        if now - (e.time or 0) > (window or Ledger.DEDUP_WINDOW) then break end
         if e.kind == "game" and e.id == id and ns.SameName(e.opponent or "", opponent) then return e end
+    end
+end
+
+--- True if any result of game `id` is on the ledger (against anyone).
+function Ledger.HasGameId(id, window)
+    if not id then return false end
+    local list = ns.charDB.ledger
+    local now = time()
+    for i = #list, 1, -1 do
+        local e = list[i]
+        if now - (e.time or 0) > (window or Ledger.DEDUP_WINDOW) then break end
+        if e.kind == "game" and e.id == id then return true end
+    end
+    return false
+end
+
+--- Keeps the ledger to its size by dropping the oldest entries that are settled (or practice).
+--- An open debt is never dropped, however old: the other player's ledger still has it.
+function Ledger.Trim()
+    local list, max = ns.charDB.ledger, ns.db.maxLedger or 500
+    local i = 1
+    while #list > max and i <= #list do
+        local e = list[i]
+        if e.settled or e.practice then table.remove(list, i) else i = i + 1 end
     end
 end
 
@@ -35,7 +60,7 @@ function Ledger.Record(entry)
     entry.settled = entry.practice and true or false
     local list = ns.charDB.ledger
     list[#list + 1] = entry
-    while #list > (ns.db.maxLedger or 500) do table.remove(list, 1) end
+    Ledger.Trim()
     if not entry.practice then
         local before = Ledger.Balance(entry.opponent) - entry.net
         if Ledger.SettleIfSquare(entry.opponent) and before ~= 0 and entry.net ~= 0 then
@@ -104,25 +129,32 @@ end
 
 --- Clearing wipes the slate, including gold mailed before it that wasn't confirmed yet:
 --- otherwise that confirmation arrives later and opens the debt again the other way.
-local function DropPendingMail(name)
+--- before: only gold mailed up to then (a season reset we heard of late).
+local function DropPendingMail(name, before)
     local pending = ns.charDB.pendingPays
     if not pending then return end
     for id, r in pairs(pending) do
-        if not name or ns.SameName(r.to, name) then pending[id] = nil end
+        if (not name or ns.SameName(r.to, name)) and (not before or (r.t or 0) <= before) then pending[id] = nil end
     end
 end
 Ledger.DropPendingMail = DropPendingMail
 
 --- Marks everything with opponent as settled regardless of balance (forgive / clear).
-function Ledger.Settle(opponent)
+--- before (my clock): only what was on the ledger up to then - for a clear the other player
+--- agreed to a while ago, whose "yes" only reached us now.
+function Ledger.Settle(opponent, before)
     opponent = ns.Full(opponent)
-    local sum = Ledger.Balance(opponent)
+    local sum = 0
     for _, e in ipairs(ns.charDB.ledger) do
-        if e.opponent == opponent then e.settled = true end
+        if e.opponent == opponent and (not before or (e.time or 0) <= before) then
+            if not e.settled then sum = sum + e.net end
+            e.settled = true
+        end
     end
     ns.charDB.clearedAt = ns.charDB.clearedAt or {}
-    ns.charDB.clearedAt[opponent] = Now()
-    DropPendingMail(opponent)
+    local at = before and math.min(Now(), before) or Now()
+    ns.charDB.clearedAt[opponent] = math.max(ns.charDB.clearedAt[opponent] or 0, at)
+    DropPendingMail(opponent, before and at or nil)
     return sum
 end
 
@@ -170,6 +202,8 @@ function Ledger.VoidLast()
                 local x = list[j]
                 if x.id == e.id and (x.kind or "game") == "game" then table.remove(list, j) end
             end
+            -- gone for good: a catch-up after a reload, or a late result, must not bring it back
+            if ns.Games and ns.Games.Void then ns.Games.Void(e.id) end
             if ns.Board then ns.Board.Changed() end
             return e
         end
@@ -222,9 +256,9 @@ function Ledger.InTransit(name)
     return sum
 end
 
-local function Apply(kind, name, copper, via)
+local function Apply(kind, name, copper, via, before)
     if kind == "settle" then
-        local amount = Ledger.Settle(name)
+        local amount = Ledger.Settle(name, before)
         ns.Log("Cleared everything with %s (%s). |cff20ff20All square!|r", ns.Short(name), ns.Money(amount, true))
         if ns.Board then ns.Board.Changed() end
     else
@@ -244,6 +278,24 @@ end
 local function Ask(id, r)
     r.asked = time()
     ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, v = r.via, t = r.t, a = r.recorded and 1 or nil }, r.to)
+end
+
+--- Requests made by hand ("I paid", "I received", "clear") that we haven't had an answer to:
+--- id -> { to, copper, kind, t, tl, asked, tries }. Saved, so a "yes" that only reaches us after
+--- the minute is up, or after a reload, still counts - otherwise their ledger has it and ours doesn't.
+Ledger.ASKED_KEEP = 7 * 86400
+Ledger.ASKED_TRIES = 10
+Ledger.ASKED_MIN_VERSION = "2.6.3" -- (older addons would show the popup again)
+function Ledger.Asked()
+    ns.charDB.askedPays = ns.charDB.askedPays or {}
+    return ns.charDB.askedPays
+end
+
+-- "did you say yes to this?" - answered only by an addon that did (q: no popup otherwise)
+local queried = {} -- id -> GetTime() we last asked (this session)
+local function Query(id, r)
+    queried[id], r.tries = GetTime(), (r.tries or 0) + 1
+    ns.Comm.Send("PAY_REQ", { id = id, k = r.kind, c = r.copper, q = 1 }, r.to)
 end
 
 --- Asks name's addon to confirm a payment (kind "paid" / "received") or clearing all debts
@@ -266,6 +318,7 @@ function Ledger.Request(kind, name, copper, via)
     end
     if ns.House.CheckOpponent(name) then return false end -- their addon can't confirm (shown in chat)
     Ledger.requests[id] = { to = name, copper = copper, kind = kind }
+    Ledger.Asked()[id] = { to = name, copper = copper, kind = kind, t = Now(), tl = time() }
     ns.Comm.Send("PAY_REQ", { id = id, k = kind, c = copper }, name)
     ns.Log("Asked %s to confirm that %s. Nothing is recorded until they accept.", ns.Short(name), MineText(kind, name, copper))
     C_Timer.After(Ledger.CONFIRM_TIMEOUT, function()
@@ -284,6 +337,19 @@ function Ledger.Reask(name)
     for id, r in pairs(Ledger.Pending()) do
         if ns.SameName(r.to, name) and now - (r.asked or 0) >= Ledger.REASK then Ask(id, r) end
     end
+    -- requests made by hand that were never answered: did their "yes" get lost?
+    local asked = ns.charDB.askedPays
+    if not asked or not next(asked) then return end
+    local p = ns.House and ns.House.peers and ns.House.peers[ns.Full(name) or ""]
+    local old = p and p.version and ns.House.IsNewer(Ledger.ASKED_MIN_VERSION, p.version)
+    for id, r in pairs(asked) do
+        if type(r) ~= "table" or Now() - (r.t or 0) > Ledger.ASKED_KEEP or (r.tries or 0) >= Ledger.ASKED_TRIES then
+            asked[id] = nil
+        elseif ns.SameName(r.to, name) and not Ledger.requests[id] and not old
+            and GetTime() - (queried[id] or -1e9) >= Ledger.REASK then
+            Query(id, r)
+        end
+    end
 end
 
 ns.Comm.On("PAY_REQ", function(f, sender)
@@ -291,6 +357,7 @@ ns.Comm.On("PAY_REQ", function(f, sender)
     if not f.id or not KINDS[kind] or (kind ~= "settle" and copper <= 0) then return end
     local function no(reason) ns.Comm.Send("PAY_NO", { id = f.id, r = reason }, sender) end
     if Answered()[f.id] then return ns.Comm.Send("PAY_OK", { id = f.id }, sender) end -- our "yes" got lost
+    if f.q then return end -- (only asking whether we'd said yes: we hadn't)
     if not ns.Guild.Allowed(sender) then return no("not in my guild") end
     local who = ns.Short(sender)
     local mail = f.v == "mail"
@@ -334,17 +401,29 @@ ns.Comm.On("PAY_REQ", function(f, sender)
 end)
 
 ns.Comm.On("PAY_OK", function(f, sender)
-    local r = Ledger.requests[f.id] or Ledger.Pending()[f.id]
+    local late = not Ledger.requests[f.id] and not Ledger.Pending()[f.id] and Ledger.Asked()[f.id]
+    local r = Ledger.requests[f.id] or Ledger.Pending()[f.id] or late
     if not r or not ns.SameName(r.to, sender) then return end
-    Ledger.requests[f.id], Ledger.Pending()[f.id] = nil, nil
+    Ledger.requests[f.id], Ledger.Pending()[f.id], Ledger.Asked()[f.id] = nil, nil, nil
     if r.recorded then return end -- (already counted on our side when the gold left)
-    Apply(r.kind, r.to, r.copper, r.via)
+    if late then
+        ns.Log("%s had confirmed that %s - their answer only reached you now.", ns.Short(sender),
+            MineText(r.kind, r.to, r.copper, r.via))
+    end
+    -- (a clear they agreed to a while ago covers what was on the ledger when we asked)
+    Apply(r.kind, r.to, r.copper, r.via, late and r.kind == "settle" and r.tl or nil)
 end)
 
 ns.Comm.On("PAY_NO", function(f, sender)
     local r = Ledger.requests[f.id] or Ledger.Pending()[f.id]
     if not r or not ns.SameName(r.to, sender) then return end
-    Ledger.requests[f.id], Ledger.Pending()[f.id] = nil, nil
+    -- "not in my guild" right after they log in is their roster not having loaded yet: mailed
+    -- gold we've already counted is asked about again later instead of being dropped
+    if r.recorded and f.r == "not in my guild" and (r.refused or 0) < 10 then
+        r.refused = (r.refused or 0) + 1
+        return
+    end
+    Ledger.requests[f.id], Ledger.Pending()[f.id], Ledger.Asked()[f.id] = nil, nil, nil
     if r.recorded then
         if f.r ~= "cleared" then
             ns.Log("|cffff8040%s's addon didn't take the %s you mailed (%s)|r - it still counts on your side, as the gold left your bags. Check with them that the mail arrived.",

@@ -45,7 +45,8 @@ end
 -- messages wait behind game messages in the queue below, so they can't crowd games out.
 Comm.LIVE_PREFIX = "GGLIVE"
 local LIVE_TYPES = { LIVE = true, LIVE_END = true, SPEC = true, STATE = true, RUNS = true, RUN = true, RUNREQ = true,
-    WEALTH = true, WREQ = true } -- (and the wealth chart: never ahead of a game)
+    WEALTH = true, WREQ = true, -- (and the wealth chart: never ahead of a game)
+    BSUM = true, BWANT = true, BROW = true } -- (and passing leaderboard rows on)
 
 Comm.registered = {} -- prefix -> WoW's answer when we registered it (for /gg live)
 

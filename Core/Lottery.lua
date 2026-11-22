@@ -273,14 +273,23 @@ local function SendClaims(L, target)
     Batches(items, function(_, _, part) Comm.Send("LOT_TS", { id = L.id, b = part }, target) end)
 end
 
-local function SendReceipts(L, target) -- the pot character only
+--- The pot character's receipts (its own mailbox), or - anyone else (2.7.0+) - the copy we hold,
+--- passed on marked fw (forwarded): older addons only take receipts from the pot character, so
+--- they drop a forwarded copy. Numbered i of n: the mailbox only counts as checked once a
+--- receiver has every batch of the set.
+local function SendReceipts(L, target)
     local items = {}
     for name, g in pairs(L.received) do if g > 0 then items[#items + 1] = name .. ":" .. g end end
     table.sort(items)
     -- rr: receipts revision - a higher one replaces everyone's copy (after a correction)
     local rr = (L.rcvRev or 0) > 0 and L.rcvRev or nil
-    Batches(items, function(_, _, part) Comm.Send("LOT_RCV", { id = L.id, b = part, ck = L.potChecked, rr = rr }, target) end)
-    if #items == 0 and (L.potChecked or rr) then Comm.Send("LOT_RCV", { id = L.id, b = "", ck = L.potChecked, rr = rr }, target) end
+    local fw = not ns.IsMe(L.pot) and 1 or nil
+    Batches(items, function(i, n, part)
+        Comm.Send("LOT_RCV", { id = L.id, b = part, ck = L.potChecked, rr = rr, i = i, n = n, fw = fw }, target)
+    end)
+    if #items == 0 and (L.potChecked or rr) then
+        Comm.Send("LOT_RCV", { id = L.id, b = "", ck = L.potChecked, rr = rr, i = 1, n = 1, fw = fw }, target)
+    end
 end
 
 local function SendResult(L, target)
@@ -291,7 +300,18 @@ local function SendResult(L, target)
     local items = {}
     for name, n in pairs(L.drawn or {}) do items[#items + 1] = name .. ":" .. n end
     table.sort(items)
-    Batches(items, function(i, n, part) Comm.Send("LOT_DL", { id = L.id, i = i, n = n, b = part }, target) end)
+    -- at: which draw this list belongs to (2.7.0+; older addons ignore it)
+    local at = (tonumber(L.drawnAt) or 0) > 0 and L.drawnAt or nil
+    Batches(items, function(i, n, part) Comm.Send("LOT_DL", { id = L.id, i = i, n = n, b = part, at = at }, target) end)
+end
+
+--- The current lottery: its details, claims, receipts and (drawn) result.
+local function ShareCurrent(L, target)
+    Fresh(L)
+    Comm.Send("LOT_NEW", NewFields(L), target)
+    SendClaims(L, target)
+    SendReceipts(L, target)
+    SendResult(L, target)
 end
 
 --- Everything we know, to one player (a guildie who just logged in) or the guild.
@@ -302,17 +322,21 @@ function Lottery.Share(target)
     if prev then Comm.Send("LOT_PREV", { id = prev.id, w = prev.winner, g = prev.pot, at = prev.at, s = prev.stake }, target) end
     local L = data.cur
     if not L then return end
-    Fresh(L)
-    Comm.Send("LOT_NEW", NewFields(L), target)
-    SendClaims(L, target)
-    if ns.IsMe(L.pot) then SendReceipts(L, target) end
-    SendResult(L, target)
+    ShareCurrent(L, target)
 end
 
 -- a guildie logged in: pass on what we know (only to them)
 function Lottery.OnHello(sender)
     local data = Lottery.Data()
     if data.cur or data.prev or next(data.closed or {}) then Lottery.Share(sender) end
+end
+
+--- I logged in (called a little after login): tell everyone online what I know of the current
+--- lottery - tickets, receipts or a result they may have missed while I was away. Nothing that
+--- answers this is a broadcast, so it can't start a loop.
+function Lottery.OnLogin()
+    local L = Lottery.Data().cur
+    if L then ShareCurrent(L, nil) end
 end
 
 --- What the winner of a drawn lottery had in the pot: their tickets in the draw x the price
@@ -370,6 +394,27 @@ end
 
 -- (quietly: guildies are only told once the creator clicks Announce)
 Lottery.toldDone = {} -- sender -> GetTime() we last told them their lottery was drawn
+Lottery.toldResult = {} -- sender -> GetTime() we last offered them our result (below)
+Lottery.heardWin = {}   -- sender -> GetTime() of the last result (LOT_WIN) they sent us
+
+Lottery.RESULT_WAIT = 3 -- seconds to see whether a sharer of our drawn lottery sends its result too
+
+--- Someone shared our lottery, which is drawn here. A LOT_NEW alone doesn't say whether theirs
+--- is drawn (a drawn copy is shared as LOT_NEW then LOT_WIN), so wait a moment: if no result
+--- follows from them, theirs is still open - send them ours (at most once a minute each).
+function Lottery.OfferResult(L, sender)
+    local key = ns.Full(sender)
+    if not key or GetTime() - (Lottery.toldResult[key] or -1e9) < 60 then return end
+    local asked = GetTime()
+    Lottery.toldResult[key] = asked
+    C_Timer.After(Lottery.RESULT_WAIT, function()
+        if (Lottery.heardWin[key] or -1e9) >= asked then
+            Lottery.toldResult[key] = nil -- (theirs is drawn too: nothing was sent)
+            return
+        end
+        if L == Lottery.Current() and L.state == "drawn" then SendResult(L, key) end
+    end)
+end
 
 Comm.On("LOT_NEW", function(f, sender)
     if not f.id or not ns.Guild.Allowed(sender) then return end
@@ -384,7 +429,8 @@ Comm.On("LOT_NEW", function(f, sender)
         end
         return
     end
-    Adopt(f)
+    local L = Adopt(f)
+    if L and L.id == f.id and L.state == "drawn" and not ns.IsMe(sender) then Lottery.OfferResult(L, sender) end
     Changed()
 end)
 
@@ -394,6 +440,9 @@ local function DropStale(data, id, why)
     local L = data.cur
     if not L or L.id ~= id or L.state ~= "open" or Now() < (L.drawAt or 0) then return false end
     data.cur = nil
+    -- (kept for this session: the result may follow, as LOT_PREV, and my part is recorded then)
+    Lottery.dropped = Lottery.dropped or {}
+    Lottery.dropped[id] = L
     MarkDone(data, id, Now())
     ns.Log("Lottery: caught up - %s", why)
     return true
@@ -495,16 +544,45 @@ Comm.On("LOT_TS", function(f, sender)
     Changed()
 end)
 
--- the pot character's receipts: only accepted from the pot character
+local rcvSets = {} -- sender|id -> { rr, ck, n, got = { [i] = true } }: numbered receipt batches seen
+
+--- The mailbox check time a receipts batch proves: an unnumbered batch (older pot addons) proves
+--- it at once, as before; a numbered one only once every batch of its set (same rr and ck) is in.
+local function CheckedBy(f, sender, rr)
+    local ck = tonumber(f.ck)
+    if not ck or ck ~= ck or ck >= 1e12 then return nil end
+    local i, n = tonumber(f.i), tonumber(f.n)
+    if not (i or n) then return f.fw ~= "1" and ck or nil end -- (a forwarded copy is always numbered)
+    if not (i and n) or n < 1 or n > 100 or i < 1 or i > n or i ~= math.floor(i) then return nil end
+    local key = tostring(sender) .. "|" .. tostring(f.id)
+    local set = rcvSets[key]
+    if not set or set.rr ~= rr or set.ck ~= ck or set.n ~= n then
+        set = { rr = rr, ck = ck, n = n, got = {} }
+        rcvSets[key] = set
+    end
+    set.got[i] = true
+    for k = 1, n do if not set.got[k] then return nil end end
+    rcvSets[key] = nil
+    return ck
+end
+
+-- the pot character's receipts: accepted from the pot character, or (2.7.0+) passed on by anyone
+-- (fw) - except by the pot character itself, whose own mailbox is the truth
 Comm.On("LOT_RCV", function(f, sender)
     local L = Lottery.Current()
-    if not L or L.id ~= f.id or not ns.SameName(sender, L.pot) then return end
+    if not L or L.id ~= f.id then return end
+    if f.fw == "1" then
+        if ns.IsMe(L.pot) or not ns.Guild.Allowed(sender) then return end
+    elseif not ns.SameName(sender, L.pot) then
+        return
+    end
     Fresh(L)
     local rr = tonumber(f.rr) or 0
+    if rr ~= rr or rr >= 1e9 then return end -- (garbage)
     if rr < (L.rcvRev or 0) then return end -- from before a correction
     if rr > (L.rcvRev or 0) then L.received, L.rcvRev = {}, rr end -- corrected: start again from these
     for name, g in (f.b or ""):gmatch("([^:;]+):(%d+)") do Merge(L.received, name, g) end
-    local ck = tonumber(f.ck)
+    local ck = CheckedBy(f, sender, rr)
     if ck and ck > (L.potChecked or 0) then L.potChecked = ck end
     if L.state == "drawn" then CheckMissed(L) end
     Changed()
@@ -684,7 +762,7 @@ local function RecordMine(L)
         net = won and ((L.potGold or 0) - stake) or -stake, wager = stake, result = won and 1 or -1,
         verified = true, settled = true, time = time(),
     }
-    while #list > (ns.db.maxLedger or 500) do table.remove(list, 1) end
+    ns.Ledger.Trim() -- (never drops an open debt)
     if ns.Board then ns.Board.Changed() end
 end
 Lottery.RecordMine = RecordMine
@@ -699,6 +777,18 @@ local function TellWinner(L)
     ns.Log("|cff20ff20You won the guild lottery!|r The pot is %s - %s will mail it to you.", ns.Money(L.potGold or 0),
         ns.Short(L.pot))
     ns.Sound("bigwin")
+end
+
+--- A lottery I still had open was drawn while the result never reached me (I only heard who
+--- won, from LOT_PREV): record my part (once, as RecordMine does) from my own count of my
+--- tickets, and tell me if I won.
+local function RecordMissed(L, winner, pot)
+    if type(L) ~= "table" or not L.id then return end
+    Fresh(L)
+    winner = ns.Full(winner) or ""
+    local n = Lottery.DrawTickets(L, ns.Me())
+    TellWinner({ id = L.id, state = "drawn", drawn = { [ns.Me()] = n }, price = L.price, pot = L.pot,
+        winner = winner, potGold = tonumber(pot) or 0 })
 end
 
 --- After the draw: paid tickets that weren't in it (owed back by the pot character, by hand).
@@ -728,11 +818,37 @@ CheckMissed = function(L)
     end
 end
 
+local function DrawnAt(at)
+    at = tonumber(at)
+    if not at or at ~= at or at <= 0 then return math.huge end -- (unknown: never earlier than a real one)
+    return at
+end
+
 local function Applies(L, f)
-    -- two results (only possible in a takeover race): everyone keeps the lower-named drawer's
+    -- two results (only possible in a takeover race): everyone keeps the earliest draw (server
+    -- time); on a tie, the lower-named drawer's. The same draw again isn't applied again.
     if L.state ~= "drawn" then return true end
+    local theirs, mine = DrawnAt(f.at), DrawnAt(L.drawnAt)
+    if theirs ~= mine then return theirs < mine end
     if (L.drawnBy or "") == (f.by or "") then return false end
     return (f.by or "") < (L.drawnBy or "")
+end
+
+--- A result replaced the one I had: my record of the old one is taken back (my ledger entry,
+--- and "recorded"/"won"), so the new one is recorded and told once its ticket list arrives.
+local function Unrecord(L)
+    L.paid, L.refundsDone, L.missed = nil, nil, nil -- (they were the old winner's)
+    local key = "lottery:" .. tostring(L.id)
+    local list = ns.charDB.ledger
+    if type(list) == "table" then
+        for i = #list, 1, -1 do
+            local e = list[i]
+            if type(e) == "table" and e.id == key and e.kind == "lottery" then table.remove(list, i) end
+        end
+    end
+    if ns.charDB.lotteryRecorded then ns.charDB.lotteryRecorded[L.id] = nil end
+    if ns.charDB.lotteryWon then ns.charDB.lotteryWon[L.id] = nil end
+    if ns.Board then ns.Board.Changed() end
 end
 
 ---------------------------------------------------------------------------
@@ -882,9 +998,11 @@ end
 Comm.On("LOT_WIN", function(f, sender)
     local L = Lottery.Current()
     if not L or L.id ~= f.id then return end
+    if sender then Lottery.heardWin[sender] = GetTime() end
     local fresh = false
     if Applies(L, f) then
         local replaced = L.state == "drawn"
+        if replaced then Unrecord(L) end
         ApplyResult(L, f)
         fresh = true
         if replaced then ns.Log("|cffff8040Lottery: two draws happened - keeping %s's.|r", ns.Short(f.by)) end
@@ -910,6 +1028,8 @@ end)
 Comm.On("LOT_DL", function(f, sender)
     local L = Lottery.Current()
     if not L or L.id ~= f.id or L.state ~= "drawn" or L.drawn then return end
+    -- (2.7.0+ say which draw it's from: never a list from a draw I didn't keep)
+    if f.at and DrawnAt(f.at) ~= DrawnAt(L.drawnAt) then return end
     L.drawnParts = L.drawnParts or {}
     L.drawnParts[tonumber(f.i) or 1] = f.b or ""
     local n = tonumber(f.n) or 1
@@ -937,7 +1057,7 @@ Comm.On("LOT_SYNC", function(f, sender)
     end
     C_Timer.After(math.random() * 2, function()
         SendClaims(L, sender)
-        if ns.IsMe(L.pot) then SendReceipts(L, sender) end
+        SendReceipts(L, sender) -- (the pot character's own, or anyone's copy, forwarded)
     end)
 end)
 
@@ -960,11 +1080,17 @@ Comm.On("LOT_PREV", function(f, sender)
         return Changed()
     end
     MarkDone(data, f.id, at)
+    local missed = Lottery.dropped and Lottery.dropped[f.id] -- (dropped a moment ago, told only "it's drawn")
     if data.cur and data.cur.id == f.id then
         -- that's my current one: drawn (fine), or still open here because I missed the result
+        missed = data.cur
         if not DropStale(data, f.id, ("%s won the %s pot."):format(ns.Short(f.w), ns.Money(tonumber(f.g) or 0))) then
             return
         end
+    end
+    if missed then
+        Lottery.dropped[f.id] = nil
+        RecordMissed(missed, f.w, f.g)
     end
     if data.prev and (data.prev.at or 0) >= at then return Changed() end
     data.prev = { id = f.id, winner = ns.Full(f.w), pot = tonumber(f.g) or 0, at = at, stake = stake }

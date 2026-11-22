@@ -677,11 +677,34 @@ function GDR.Start()
     SendAll(game, "GDR_START", fields)
     for i = 1, 2 do
         C_Timer.After(GDR.START_RESEND * i, function()
-            if Games.Get(game.id) == game and #game.history == 0 then SendAll(game, "GDR_START", fields) end
+            -- (even if the host has rolled already: a player who missed it would sit in the lobby
+            -- and be knocked out for not rolling. A repeat is ignored by anyone already playing.)
+            if Games.Get(game.id) == game and game.state == "play" then SendAll(game, "GDR_START", fields) end
         end)
     end
     BeginPlay(game)
     return true
+end
+
+--- Puts a finished room on my ledger: the winner gets one entry per loser, a loser one entry
+--- against the winner. Returns my net and outcome.
+local function Book(id, players, winner, bet, verified, drop)
+    if ns.IsMe(winner) then
+        -- one ledger entry per loser (each owes me the wager); only the first counts as the game
+        local first = true
+        for _, p in ipairs(players) do
+            if not ns.IsMe(p) then
+                ns.Ledger.Record({ id = id, game = "groupdr", opponent = p, net = bet,
+                    result = first and 1 or 0, wager = first and bet or 0, extra = (not first) or nil,
+                    verified = verified })
+                first = false
+            end
+        end
+        return bet * (#players - 1), 1
+    end
+    ns.Ledger.Record({ id = id, game = "groupdr", opponent = winner, net = -bet,
+        result = -1, wager = bet, verified = verified, drop = drop })
+    return -bet, -1
 end
 
 local function Finish(game, winner)
@@ -697,30 +720,24 @@ local function Finish(game, winner)
     ns.UI.SetRollPrompt(nil)
     local iWon = ns.IsMe(winner)
     local verified = game.verified ~= false
-    local net, outcome
-    if iWon then
-        -- one ledger entry per loser (each owes me the wager); only the first counts as the game
-        local first = true
-        for _, p in ipairs(game.players) do
-            if not ns.IsMe(p) then
-                ns.Ledger.Record({ id = game.id, game = "groupdr", opponent = p, net = game.bet,
-                    result = first and 1 or 0, wager = first and game.bet or 0, extra = (not first) or nil,
-                    verified = verified })
-                first = false
-            end
-        end
-        net, outcome = game.bet * (#game.players - 1), 1
-    else
-        ns.Ledger.Record({ id = game.id, game = "groupdr", opponent = winner, net = -game.bet,
-            result = -1, wager = game.bet, verified = verified, drop = game.drop })
-        net, outcome = -game.bet, -1
-    end
+    local net, outcome = Book(game.id, game.players, winner, game.bet, verified, game.drop)
     -- kept a while, for a player whose addon reloaded before the end
-    Games.Remember(game.id, game.players, {
+    local messages = {
         { "GG_PLY", { id = game.id, p = Names(game.players) } },
         { "GG_DONE", { id = game.id, g = "groupdr", w = IndexOf(game.players, winner), s = game.bet, n = game.start,
             v = verified and 1 or 0 } },
-    })
+    }
+    Games.Remember(game.id, game.players, messages)
+    -- and sent until their addons have it (see Games.lua): the winner tells every loser, each
+    -- loser tells the winner - so a player whose addon had dropped the room still records it
+    Games.Unnote(game.id)
+    local owed = {}
+    if iWon then
+        for _, p in ipairs(game.players) do owed[#owed + 1] = p end
+    else
+        owed[1] = winner
+    end
+    Games.Owe(game.id, "groupdr", owed, { messages[1], { "GG_RES", messages[2][2] } })
     game.finished, game.net, game.outcome = true, net, outcome
     game.summary = ("%s %s the last one standing out of %d"):format(iWon and "you" or ns.Short(winner),
         iWon and "are" or "is", #game.players)
@@ -895,6 +912,7 @@ function GDR.Leave(game, why)
             Comm.Send("GDR_LEAVE", { id = game.id }, game.host)
             ns.Log("You left %s's group deathroll.", ns.Short(game.host))
         end
+        Games.Unnote(game.id) -- left before it started: no result can be ours
         Games.Remove(game)
         return true
     end
@@ -902,16 +920,16 @@ function GDR.Leave(game, why)
         SendAll(game, "GDR_LEAVE", { id = game.id, k = game.n })
         KnockOut(game, ns.Me(), "forfeited", false)
         if Games.Get(game.id) == game then
-            ns.Print("You forfeited. GuildGambit keeps watching so your wager goes to whoever wins - |cffffff00/gg cancel|r again to stop watching (nothing is recorded then).")
+            ns.Print("You forfeited. GuildGambit keeps watching so your wager goes to whoever wins - |cffffff00/gg cancel|r again to stop watching (the winner's addon still sends yours the result).")
         end
         return true
     end
     if not game.leaveArmed then
         game.leaveArmed = true
-        ns.Print("You're out, waiting to see who wins so your debt goes to the right player. |cffffff00/gg cancel|r again to stop watching (nothing is recorded then).")
+        ns.Print("You're out, waiting to see who wins so your debt goes to the right player. |cffffff00/gg cancel|r again to stop watching (the winner's addon still sends yours the result).")
         return true
     end
-    ns.Log("Stopped watching the group deathroll - no result recorded.")
+    ns.Log("Stopped watching the group deathroll - the result is recorded when the winner's addon sends it.")
     Games.Remove(game)
     return true
 end
@@ -988,6 +1006,12 @@ end)
 
 Comm.On("GDR_START", function(f, sender)
     local game = MyRoom(f.id, sender)
+    if not game and f.id and not Games.Get(f.id) and not Games.Noted(f.id, "groupdr")
+        and not ns.Ledger.HasGameId(f.id) then
+        -- a room we aren't in (our "left" never reached the host): say so again
+        Comm.Send("GDR_LEAVE", { id = f.id }, sender)
+        return
+    end
     if not game or game.state ~= "lobby" or IsHost(game) then return end
     game.players = HostFirst(ParseNames(f.p), sender)
     if not IndexOf(game.players, ns.Me()) then
@@ -1083,18 +1107,19 @@ end)
 -- roll: the latest step wins, and at the same step the host's - the same rule on every client,
 -- whatever order the answers arrive in. The normal turn updates fix anything left over.
 ---------------------------------------------------------------------------
-local recoverPlayers = {} -- id -> { from = name, list = { names } } (the list a GG_HERE/GG_DONE refers to)
+local recoverPlayers = {} -- id|sender -> { from = name, list = { names } } (the list their GG_HERE/GG_DONE/GG_RES refers to)
 
 Comm.On("GG_PLY", function(f, sender)
-    if not f.id or not (Games.recovering or Games.Get(f.id)) then return end
+    if not f.id or not (Games.recovering or Games.Get(f.id) or Games.Noted(f.id, "groupdr")
+        or ns.Ledger.HasGameId(f.id, Games.NOTE_KEEP + 86400)) then return end
     local list = ParseNames(f.p)
     if #list < GDR.MIN_PLAYERS or #list > GDR.MAX_PLAYERS then return end
-    recoverPlayers[f.id] = { from = sender, list = list }
+    recoverPlayers[f.id .. "|" .. (ns.Full(sender) or sender):lower()] = { from = sender, list = list }
 end)
 
 --- The player list the sender just sent for this room, if it has us and them in it.
 local function SentPlayers(f, sender)
-    local p = recoverPlayers[f.id]
+    local p = f.id and recoverPlayers[f.id .. "|" .. (ns.Full(sender) or sender):lower()]
     if not p or not ns.SameName(p.from, sender) then return nil end
     local list = {}
     for i, n in ipairs(p.list) do list[i] = ns.IsMe(n) and ns.Me() or n end
@@ -1248,3 +1273,55 @@ GDR.recovery = {
     end,
 }
 Games.recovery.groupdr = GDR.recovery
+
+-- A room's result from another player's addon, sent until we answer (see Games.lua). Taken for
+-- a room we still have open, or have a note of having joined at that wager.
+Games.results.groupdr = function(f, sender)
+    if Games.IsVoided(f.id) then return "ok" end
+    local list = SentPlayers(f, sender)
+    local bet, w = tonumber(f.s), tonumber(f.w)
+    local winner = list and w and list[w]
+    if not winner or not bet or bet < 0 then return nil end -- (no player list yet: they'll send again)
+    local iWon = ns.IsMe(winner)
+    local window = Games.NOTE_KEEP + 86400
+    -- already on our ledger: the same result, or a different one?
+    local mine
+    for _, p in ipairs(list) do
+        if not ns.IsMe(p) then mine = mine or ns.Ledger.FindGame(f.id, p, window) end
+    end
+    if mine then
+        local theirs = not iWon and ns.Ledger.FindGame(f.id, winner, window)
+        if (iWon and mine.net >= 0) or (theirs and theirs.net <= 0) then return "ok" end
+        Games.WarnDiffers(f.id, "groupdr", sender)
+        return "d"
+    end
+    local game = Games.Get(f.id)
+    if game then
+        if game.kind ~= "groupdr" or game.bet ~= bet or not IndexOf(game.players, sender) then return "u" end
+        if not IndexOf(game.players, winner) then game.players = list end -- (our lobby list was behind)
+        local i = IndexOf(game.players, winner)
+        if not i then return "u" end
+        ns.Log("%s's addon has the end of the group deathroll - catching up.", ns.Short(sender))
+        game.state = "play"
+        game.alive = { game.players[i] }
+        game.verified = false -- (on their addon's word, not from rolls we saw)
+        Finish(game, game.players[i])
+        return "ok"
+    end
+    local note = Games.Noted(f.id, "groupdr")
+    if not note or note.s ~= bet then return "u" end
+    local net, outcome = Book(f.id, list, winner, bet, false, nil)
+    Games.Unnote(f.id)
+    ns.Log("Group deathroll: your addon missed the end - recorded from %s's: %s won out of %d - %s", ns.Short(sender),
+        iWon and "you" or ns.Short(winner), #list, ns.ResultText(net, outcome))
+    if iWon then
+        local beaten = {}
+        for _, p in ipairs(list) do if not ns.IsMe(p) then beaten[#beaten + 1] = p end end
+        ns.GuildAnnounce(("[GuildGambit] %s won a group deathroll against %s %s!"):format(ns.Short(ns.Me()),
+            ns.NameList(beaten), bet > 0 and ("for " .. ns.Money(bet) .. " each (" .. ns.Money(net) .. " pot)")
+                or "just for fun"))
+    end
+    if ns.Board then ns.Board.Changed() end
+    if ns.UI then ns.UI.Refresh() end
+    return "ok"
+end

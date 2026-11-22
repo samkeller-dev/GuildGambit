@@ -5,6 +5,33 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.7.0 - 2026-11-22
+
+- **Addons now agree with each other.** A sweep for every way two players' addons could end up with different numbers. Nearly all of them came down to one message being sent once and never checked, or to news only reaching whoever was online at that moment.
+- **Game results always reach the other player.** When a game ends, your addon sends the result to the other player (every player, in a group deathroll) and keeps sending it - straight away, then whenever it next hears from them, even after a reload or logout - until their addon confirms it has it.
+  - This fixes a win or loss showing on one ledger and not the other when the last roll or card never arrived: in a deathroll or coinflip between players who aren't grouped, in blackjack, and in group deathroll for anyone who was knocked out and stopped watching, was on a loading screen at the end, or had cancelled a game the other player had just finished.
+  - A result your addon takes this way is marked "unverified rolls" and says "your addon missed the end - recorded from theirs". It's only ever taken for a game you joined, for no more than the wager you agreed, and never twice.
+  - If two addons did record different results for the same game, both players are now told to compare ledgers instead of it going unnoticed.
+  - Blackjack: a lost "double" no longer leaves one player recording half the amount, and a lost "stand" no longer leaves a player waiting for a card forever.
+  - Group deathroll: the host repeats "started" even after rolling, so nobody is left in the lobby and knocked out for not rolling. Stopping watching once you're out no longer means your loss goes unrecorded.
+  - **/gg undo** is final: reloading soon after no longer brings the game back on one side.
+- **Ledger: an unpaid debt is never dropped.** The ledger keeps 500 entries; it used to drop the oldest whatever it was, including a debt someone still owed. It now only drops old settled entries and practice games.
+- **Season resets:**
+  - A reset you hear about late now clears what was owed before it and keeps debts made since (it used to wipe those too, on your side only).
+  - Each of your characters clears its own debts for a reset, not just the first one to hear of it.
+  - Two players on different seasons now sort it out as soon as their addons talk, whoever was online first. Leaderboard numbers from an old season no longer get onto a new season's board.
+- **"I paid" / "I received" / "clear" by hand:** if the other player said yes but their answer never reached you (or you reloaded before it did), your addon asks theirs again later and records it then. They aren't shown the question a second time.
+- **Lottery:**
+  - Logging in now also tells everyone online what your addon knows (tickets, a result), not only the other way round. A draw only one player knew about no longer leaves everyone else on "draw due".
+  - If you missed a draw and the next lottery had already opened, your stake (or your win) is now recorded and you're told if you won.
+  - If a lottery somehow gets drawn twice, every addon keeps the earliest draw, and ledgers follow.
+  - The pot character's mail receipts are passed on by every addon and only count as "mailbox checked" once all of them have arrived, so a drawer who wasn't online with the pot character no longer leaves paid tickets out.
+- **Watching games:** a spectator's table no longer freezes when the host reloads; a group deathroll whose host stops watching is no longer announced as "ended with no winner"; a full room of long names no longer shows a blank table.
+- Everyone needs this version for the above to work between them; with someone on an older version, games play exactly as before.
+- **Leaderboard: everyone now sees the same numbers.** A player's row only ever came from that player's own addon, so you only got it if you were online at the same time as them. Anyone who played while you were away showed their old numbers on your board, and different ones on everybody else's.
+  - Addons now pass rows on. When you log in, yours compares boards with the guild: anyone holding a newer row for someone sends it, and anyone holding an older one asks you for yours. The newest always wins, so all boards end up the same, the Kodo Crossing high scores included.
+  - This happens quietly in the background a few seconds after login, behind any game in progress. Only addons on this version pass rows on, so the more guildies update, the better it works.
+
 ## 2.6.2 - 2026-11-21
 
 - **High Roller: bosses come much sooner,** so one turns up within a flight path or boat ride.

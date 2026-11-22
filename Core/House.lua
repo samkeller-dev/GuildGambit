@@ -25,6 +25,7 @@ function House.SeePeer(name)
     if name and not ns.IsMe(name) then
         Peer(name)
         if ns.Ledger and ns.Ledger.Reask then ns.Ledger.Reask(name) end -- mailed gold to confirm
+        if ns.Games and ns.Games.Seen then ns.Games.Seen(name) end      -- game results to confirm
     end
 end
 
@@ -75,7 +76,16 @@ end
 
 function House.SayHello()
     Hello(nil, false)
-    if ns.Board then ns.Board.Send(nil) end
+    if ns.Board then
+        ns.Board.CatchUp() -- (a season reset another of our characters heard first)
+        ns.Board.Send(nil)
+        -- once the answers are in (a season reset among them): compare boards with the guild
+        C_Timer.After(ns.Board.DIGEST_DELAY, ns.Board.SendDigest)
+    end
+    -- and tell the guild what we know of the lottery (tickets, a result they may have missed)
+    if ns.Lottery and ns.Lottery.OnLogin then
+        C_Timer.After(ns.Board and ns.Board.DIGEST_DELAY or 10, function() ns.Lottery.OnLogin() end)
+    end
     if ns.Wealth then ns.Wealth.Send(nil, true) end
 end
 
@@ -186,6 +196,7 @@ Comm.On("CANCEL", function(f, sender)
     local game = ns.Games.Get(f.id)
     if game and game.kind ~= "groupdr" and ns.SameName(game.opponent, sender) then
         ns.Games.Cancel(game, "by " .. ns.Short(sender), true)
+        ns.Games.Unnote(f.id) -- they cancelled: there can be no result to come
     end
 end)
 
@@ -294,7 +305,14 @@ end
 --- "Eoka won 10g from Bob" (neutral), for the end of a game.
 function Live.ResultText(game)
     if game.kind == "groupdr" then
-        if not game.winner then return "Ended with no winner" end
+        if not game.winner then
+            -- the host's addon let go of a room still being played (they were out and stopped
+            -- watching, or lost track of it): there is no result, the others may still be rolling
+            if game.state == "play" and not game.finished and #(game.alive or {}) >= 2 then
+                return "The host stopped following it - the game may still be going"
+            end
+            return "Ended with no winner"
+        end
         local pot = game.bet * (#game.players - 1)
         return ("%s is the last one standing%s"):format(Name(game.winner), pot > 0 and (" - wins " .. ns.Money(pot)) or "")
     end
@@ -395,6 +413,7 @@ end
 Live.TICK = 0.25 -- quick, so watchers see each roll almost as soon as the players do
 Live.STATE_EVERY = 0.4 -- at most this often (a newer state replaces one still waiting)
 Live.REASK = 5 -- no table from a player we're watching after this long: ask again
+Live.REWATCH = 15 -- a table, but no update for this long while the game is still announced: ask again
 C_Timer.After(1, Tick)
 
 --- Games other people are playing, newest first.
@@ -447,7 +466,17 @@ Comm.On("LIVE", function(f, sender)
     if not ns.SameName(g.host, sender) then return end
     g.h, g.seen = f.h, GetTime()
     -- we were watching and the host forgot us (e.g. they reloaded): ask again
-    if Live.watching == f.id and not g.mirror and not g.l1 then Comm.Send("WATCH", { id = f.id, v = 2 }, sender) end
+    if Live.watching == f.id and not g.mirror and not g.l1 then Comm.Send("WATCH", { id = f.id, v = 2 }, sender)
+    elseif Live.watching == f.id and not g.ended and not (g.mirror and g.mirror.finished) then
+        -- we have a table, but nothing new for a while although the game is still announced:
+        -- the host's addon may have reloaded and forgotten us, so ask again (rate-limited; a
+        -- host who still has us just sends the table once more)
+        local now = GetTime()
+        if now - (g.updatedAt or 0) >= Live.REWATCH and now - (g.askedAt or 0) >= Live.REWATCH then
+            g.askedAt = now
+            Comm.Send("WATCH", { id = f.id, v = 2 }, sender)
+        end
+    end
     if ns.UI then ns.UI.Refresh() end
 end)
 
@@ -492,6 +521,7 @@ Comm.On("SPEC", function(f, sender)
     local g = Live.games[f.id or ""]
     if not g or not ns.SameName(g.host, sender) then return end
     g.h, g.l1, g.l2, g.seen = f.h or g.h, f.a or "", f.b or "", GetTime()
+    g.updatedAt = g.seen
     if ns.UI then ns.UI.Refresh() end
 end)
 
@@ -526,6 +556,15 @@ local function Split(text)
     return out
 end
 
+-- name cut to at most len bytes plus a ".", never in the middle of a UTF-8 character
+local function ShortName(s, len)
+    s = tostring(s or "")
+    if #s <= len then return s end
+    local i = len
+    while i > 0 and (s:byte(i + 1) or 0) >= 128 and (s:byte(i + 1) or 0) < 192 do i = i - 1 end
+    return s:sub(1, i) .. "."
+end
+
 --- The fields describing a game for watchers (all short, to fit one addon message).
 function Live.State(game)
     local f = { id = game.id, k = KIND_CODE[game.kind], f = game.finished and 1 or 0 }
@@ -545,6 +584,16 @@ function Live.State(game)
         f.t, f.w, f.mx, f.st, f.ga = num(game.turn), num(game.winner), game.max or game.start, game.start, game.state
         local lr = game.lastRoll
         if lr then f.lw, f.lv, f.lm, f.ls = num(lr.who), lr.value, lr.max, lr.seq end
+        -- a full room of long names can be too long for one addon message (it would be dropped
+        -- and the watcher would get no table at all): shorten the names until it fits
+        if #Comm.Encode("STATE", f) > 255 then
+            for _, len in ipairs({ 8, 6, 4, 2 }) do
+                local short = {}
+                for i, n in ipairs(game.players) do short[i] = ShortName(Name(n), len) end
+                f.pl = Csv(short)
+                if #Comm.Encode("STATE", f) <= 255 then break end
+            end
+        end
         return f
     end
     f.a, f.b, f.s = game.a, game.b, game.bet or game.stake or 0
@@ -630,6 +679,7 @@ Comm.On("STATE", function(f, sender)
     local g = Live.games[f.id or ""]
     if not g or Live.watching ~= f.id or not ns.SameName(g.host, sender) then return end
     g.seen = GetTime()
+    g.updatedAt = g.seen
     local ok, m = pcall(Live.Mirror, g, f)
     if ok and m then
         g.mirror = m

@@ -416,8 +416,11 @@ BJ.sentReveals = {}
 local function SendReveal(game)
     local mine, theirs = BJ.MyHand(game), BJ.TheirHand(game)
     if Games.Get(game.id) ~= game then return end
-    Comm.Send("BJD_REVEAL", { id = game.id, n = mine.secret, s = mine.salt }, game.opponent)
-    BJ.sentReveals[game.id] = { n = mine.secret, s = mine.salt, to = game.opponent }
+    -- (dn, d: how many cards my hand ended on and whether I doubled - also sent on their own
+    -- as BJD_DONE / BJD_DB, but each of those is one message and may have been lost)
+    local dn, d = #mine.cards, mine.doubled and 1 or nil
+    Comm.Send("BJD_REVEAL", { id = game.id, n = mine.secret, s = mine.salt, dn = dn, d = d }, game.opponent)
+    BJ.sentReveals[game.id] = { n = mine.secret, s = mine.salt, dn = dn, d = d, to = game.opponent }
     mine.revealSent = true
     if not theirs.revealed then
         C_Timer.After(BJ.DUEL_RESEND, function()
@@ -458,7 +461,7 @@ local function StepMine(game)
             or (mine.doubleAt and #c >= mine.doubleAt + 1) or (mine.standAt and #c >= mine.standAt) then
             mine.done = true
             Rolls.UnwatchPrefix(game.id .. ":" .. s)
-            Comm.Send("BJD_DONE", { id = game.id, n = #c }, game.opponent)
+            Comm.Send("BJD_DONE", { id = game.id, n = #c, d = mine.doubled and 1 or nil }, game.opponent)
         else
             local i = #c + 1
             WatchCard(game, s, i, function(v) if #c == i - 1 then c[i] = Rules.Card(v) end end)
@@ -687,6 +690,7 @@ Comm.On("BJD_DONE", function(f, sender)
     local game, n = TheirDuel(f, sender), tonumber(f.n)
     if not game or not n or n < 2 then return end
     local theirs = BJ.TheirHand(game)
+    if f.d == "1" then theirs.doubled = true end -- (their "double" message may have been lost)
     if not theirs.doneN then
         theirs.doneN = n
         UpdateDuel(game)
@@ -725,7 +729,17 @@ end
 
 Comm.On("BJD_REVEAL", function(f, sender)
     local game = TheirDuel(f, sender)
-    if game then BJ.ApplyReveal(game, f) end
+    if not game then return end
+    -- a reveal only comes from a finished hand: it also says how it ended, in case their
+    -- "done" or "double" never reached us (we'd wait for another card forever otherwise)
+    local theirs = BJ.TheirHand(game)
+    if f.d == "1" then theirs.doubled = true end
+    local dn = tonumber(f.dn)
+    if dn and dn >= 2 and dn % 1 == 0 and not theirs.doneN then
+        theirs.doneN = dn
+        UpdateDuel(game)
+    end
+    if Games.Get(game.id) == game then BJ.ApplyReveal(game, f) end
 end)
 
 -- they're still waiting for our reveal (ours got lost): send it again
@@ -738,7 +752,7 @@ Comm.On("BJD_WANT", function(f, sender)
     -- our side already finished (we got their reveal first): answer from what we sent
     local sent = f.id and BJ.sentReveals[f.id]
     if sent and ns.SameName(sent.to, sender) then
-        Comm.Send("BJD_REVEAL", { id = f.id, n = sent.n, s = sent.s }, sender)
+        Comm.Send("BJD_REVEAL", { id = f.id, n = sent.n, s = sent.s, dn = sent.dn, d = sent.d }, sender)
     end
 end)
 

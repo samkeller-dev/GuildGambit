@@ -8,6 +8,7 @@ Games.active = {} -- id -> game
 
 function Games.Add(game)
     Games.active[game.id] = game
+    Games.Note(game) -- (saved: see "Results that reach everyone" below)
     return game
 end
 
@@ -93,8 +94,12 @@ function Games.Finish(game, net, summary, outcome)
     })
     -- kept a while, so an opponent who reloaded before the end still gets the same result
     if not practice and not game.asHouse then
-        Games.Remember(game.id, { game.opponent }, { { "GG_DONE", { id = game.id, g = game.kind, net = net,
-            o = outcome, w = wager, v = game.verified ~= false and 1 or 0 } } })
+        local fields = { id = game.id, g = game.kind, net = net, o = outcome, w = wager,
+            v = game.verified ~= false and 1 or 0 }
+        Games.Remember(game.id, { game.opponent }, { { "GG_DONE", fields } })
+        -- and sent to them until their addon says it has it (they may have missed the end)
+        Games.Unnote(game.id)
+        Games.Owe(game.id, game.kind, { game.opponent }, { { "GG_RES", fields } })
     end
     local tag = practice and " |cff888888(practice)|r" or
         (game.verified == false and " |cffff8800(unverified rolls)|r" or "")
@@ -261,6 +266,7 @@ Games.Involves = Involves
 
 --- Called once at login: ask the guild whether we were in a game.
 function Games.StartRecovery()
+    Games.Prune()
     -- (no IsInGuild check: right after a fresh login it can still say no; a guild message
     -- simply isn't sent when we aren't in one)
     Games.recovering = true
@@ -308,7 +314,7 @@ local ONE_V_ONE = { deathroll = "Deathroll", coinflip = "Coinflip", blackjack = 
 
 -- a game that ended (or was cancelled) while we were away
 ns.Comm.On("GG_DONE", function(f, sender)
-    if not f.id then return end
+    if not f.id or Games.IsVoided(f.id) then return end
     local kind = f.g
     local rec = Games.recovery[kind]
     if rec and rec.done then return rec.done(f, sender) end
@@ -346,6 +352,9 @@ ns.Comm.On("GG_HERE", function(f, sender)
     if not rec or not rec.here then return end
     if not (Games.recovering or Games.Get(f.id)) then return end
     if not ns.Guild.Allowed(sender) then return end
+    -- a game we've already recorded (or undone) is over for us: never played out again. Their
+    -- addon gets our result the normal way (GG_RES below).
+    if not Games.Get(f.id) and (Games.IsVoided(f.id) or ns.Ledger.HasGameId(f.id)) then return end
     rec.here(f, sender)
 end)
 
@@ -354,3 +363,222 @@ Games.recovery.coinflip = { answer = Games.CancelForReload }
 Games.recovery.blackjack = { answer = function(game, asker)
     if game.mode == "duel" then Games.CancelForReload(game, asker) end
 end }
+
+---------------------------------------------------------------------------
+-- Results that reach everyone. A game's end used to reach the other player as one message (the
+-- last roll, the last card); if it was lost, one addon recorded the game and the other never
+-- did. So:
+--   * every real game an addon takes part in is noted in its saved variables (Games.Note), so
+--     it still knows "I agreed to game X for this stake" after a cancel, a /reload or a logout;
+--   * the addon that records a result sends it to the other player(s) (GG_RES) and keeps
+--     sending - at once, and then whenever it hears from them, across reloads and logouts -
+--     until their addon answers (GG_ACK);
+--   * an addon takes a result for a game it still has open, or has a note of, and records the
+--     mirror image. One already on its ledger is never recorded twice; if the two results
+--     differ, or it knows nothing of the game, it says so and both players are told to compare.
+-- Older addons don't answer and are left alone (the reload catch-up above still covers them).
+---------------------------------------------------------------------------
+Games.NOTE_KEEP = 7 * 86400      -- notes, unconfirmed results and undone ids are kept this long
+Games.RESULT_FIRST = { 2, 10, 60 } -- seconds after the end: the first sends (if they look online)
+Games.RESULT_EVERY = 60          -- then at most this often, whenever we hear from them
+Games.RESULT_TRIES = 12          -- give up after this many sends without an answer
+Games.RESULT_MIN_VERSION = "2.6.3" -- (2.6.3 was never released: the first version out with this is later)
+Games.results = {}               -- kind -> fn(f, sender) -> "ok" | "u" (unknown game) | "d" (differs) | nil
+
+local function Saved(key)
+    if not ns.charDB then return {} end
+    ns.charDB[key] = ns.charDB[key] or {}
+    return ns.charDB[key]
+end
+
+--- Notes a real game we're in (called for every game; practice and house games aren't noted).
+function Games.Note(game)
+    if not ns.charDB or not game or not game.id or game.practice or game.asHouse then return end
+    Saved("openGames")[game.id] = { g = game.kind, s = game.stake or game.bet or 0, t = ns.Ledger.Now() }
+end
+
+function Games.Noted(id, kind)
+    local n = id and ns.charDB and ns.charDB.openGames and ns.charDB.openGames[id]
+    if n and n.g == kind then return n end
+end
+
+function Games.Unnote(id)
+    if id and ns.charDB and ns.charDB.openGames then ns.charDB.openGames[id] = nil end
+end
+
+--- /gg undo: the game is gone for good on this addon - nothing brings it back.
+function Games.Void(id)
+    if not id then return end
+    Saved("voided")[id] = ns.Ledger.Now()
+    Games.recent[id] = nil
+    Saved("results")[id] = nil
+    Games.Unnote(id)
+end
+
+function Games.IsVoided(id)
+    return id ~= nil and ns.charDB ~= nil and ns.charDB.voided ~= nil and ns.charDB.voided[id] ~= nil
+end
+
+--- Forgets what's too old to matter (at login).
+function Games.Prune()
+    if not ns.charDB then return end
+    local now = ns.Ledger.Now()
+    for id, n in pairs(Saved("openGames")) do
+        if type(n) ~= "table" or now - (n.t or 0) > Games.NOTE_KEEP then ns.charDB.openGames[id] = nil end
+    end
+    for id, r in pairs(Saved("results")) do
+        if type(r) ~= "table" or type(r.to) ~= "table" or type(r.m) ~= "table" or now - (r.t or 0) > Games.NOTE_KEEP then
+            ns.charDB.results[id] = nil
+        end
+    end
+    for id, t in pairs(Saved("voided")) do
+        if now - (tonumber(t) or 0) > Games.NOTE_KEEP then ns.charDB.voided[id] = nil end
+    end
+end
+
+-- can their addon answer? (an older one can't; one we haven't heard a version from might)
+local function CanTake(name)
+    local p = ns.House and ns.House.peers and ns.House.peers[name]
+    local v = p and p.version
+    return not v or not ns.House.IsNewer(Games.RESULT_MIN_VERSION, v)
+end
+
+local sentAt = {} -- id|name -> GetTime() of the last send
+
+--- Sends result `id` to everyone still owed it (only: just that player, who we've just heard from).
+function Games.SendResults(id, only)
+    local r = ns.charDB and ns.charDB.results and ns.charDB.results[id]
+    if type(r) ~= "table" or type(r.to) ~= "table" or type(r.m) ~= "table" then return end
+    local now = GetTime()
+    for name, tries in pairs(r.to) do
+        if not only or ns.SameName(name, only) then
+            local key = tostring(id) .. "|" .. name
+            if (tonumber(tries) or 0) >= Games.RESULT_TRIES or not CanTake(name) then
+                r.to[name] = nil
+            elseif (only or ns.Guild.IsOnline(name) ~= false)
+                and now - (sentAt[key] or -1e9) >= (only and Games.RESULT_EVERY or 1) then
+                sentAt[key] = now
+                r.to[name] = (tonumber(tries) or 0) + 1
+                for _, m in ipairs(r.m) do ns.Comm.Send(m[1], m[2], name) end
+            end
+        end
+    end
+    if not next(r.to) then ns.charDB.results[id] = nil end
+end
+
+--- We've recorded game `id`: these players are owed the result until their addons have it.
+function Games.Owe(id, kind, names, messages)
+    if not ns.charDB or not id then return end
+    local to = {}
+    for _, n in ipairs(names) do
+        if n and not ns.IsMe(n) then to[ns.Full(n) or n] = 0 end
+    end
+    if not next(to) then return end
+    Saved("results")[id] = { g = kind, t = ns.Ledger.Now(), to = to, m = messages }
+    for _, d in ipairs(Games.RESULT_FIRST) do
+        C_Timer.After(d, function() Games.SendResults(id) end)
+    end
+end
+
+--- That player evidently has result `id` (they answered, or sent us the same one).
+local function Settled(id, name)
+    local r = ns.charDB and ns.charDB.results and ns.charDB.results[id]
+    if type(r) ~= "table" or type(r.to) ~= "table" then return false end
+    local hit = false
+    for n in pairs(r.to) do
+        if ns.SameName(n, name) then r.to[n] = nil hit = true end
+    end
+    if not next(r.to) then ns.charDB.results[id] = nil end
+    return hit
+end
+
+--- We heard from name (any addon message): send them any result they haven't confirmed.
+function Games.Seen(name)
+    local out = ns.charDB and ns.charDB.results
+    if not out or not next(out) then return end
+    local ids = {}
+    for id, r in pairs(out) do
+        if type(r) == "table" and type(r.to) == "table" then
+            for n in pairs(r.to) do
+                if ns.SameName(n, name) then ids[#ids + 1] = id break end
+            end
+        end
+    end
+    for _, id in ipairs(ids) do Games.SendResults(id, name) end
+end
+
+local KIND_TEXT = { deathroll = "deathroll", coinflip = "coinflip", blackjack = "blackjack", groupdr = "group deathroll" }
+local warned = {}
+--- Our ledger and theirs disagree about a game: say so, once.
+function Games.WarnDiffers(id, kind, name)
+    if warned[id] then return end
+    warned[id] = true
+    ns.Log("|cffff8040Your ledger and %s's don't agree on your last %s together|r - compare them (the Ledger tab) and fix it by hand with |cffffff00/gg undo|r or a payment.",
+        ns.Short(name), KIND_TEXT[kind] or "game")
+end
+
+-- a 1v1 result from the other player's addon
+local function TakeOneVOne(f, sender)
+    local kind = f.g
+    local net, outcome, wager = tonumber(f.net), tonumber(f.o), tonumber(f.w) or 0
+    if not net or not outcome or math.abs(net) > 2 * ns.MAX_BET_GOLD * ns.COPPER_PER_GOLD then return nil end
+    net, outcome = -net, -outcome -- their result, from our side
+    local have = ns.Ledger.FindGame(f.id, sender, Games.NOTE_KEEP + 86400)
+    if have then
+        if have.net == net then return "ok" end
+        Games.WarnDiffers(f.id, kind, sender)
+        return "d"
+    end
+    local game = Games.Get(f.id)
+    local ours = game and game.kind == kind and ns.SameName(game.opponent or "", sender)
+    if game and not ours then return "u" end
+    local note = Games.Noted(f.id, kind)
+    if not (ours or note) then return "u" end
+    -- the stake we agreed to bounds what they can tell us (blackjack: each side may double)
+    local stake = game and (game.stake or game.bet) or (note and note.s) or 0
+    if math.abs(net) > stake * (kind == "blackjack" and 4 or 1) then return "u" end
+    if game then Games.Remove(game) end
+    -- (on their addon's word, not from rolls we saw: marked unverified, like a relayed roll)
+    local _, new = ns.Ledger.Record({ id = f.id, game = kind, opponent = sender, net = net, result = outcome,
+        wager = wager, verified = false })
+    Games.Unnote(f.id)
+    if new then
+        ns.Log("%s vs %s: your addon missed the end - recorded from theirs: %s", ONE_V_ONE[kind], ns.Short(sender),
+            ns.ResultText(net, outcome))
+        if outcome > 0 then
+            -- the winner's addon posts it, and that's us - nobody has yet
+            ns.GuildAnnounce(("[GuildGambit] %s %s against %s %s!"):format(ns.Short(ns.Me()), WON_TEXT[kind] or "won a game",
+                ns.Short(sender), net > 0 and ("for " .. ns.Money(net)) or "just for fun"))
+        end
+        if ns.Board then ns.Board.Changed() end
+        if ns.UI then ns.UI.Refresh() end
+    end
+    return "ok"
+end
+
+ns.Comm.On("GG_RES", function(f, sender)
+    if not f.id or not ns.charDB or not ns.Guild.Allowed(sender) then return end
+    local answer
+    if Games.IsVoided(f.id) then
+        answer = "ok" -- (undone here: nothing to record, and nothing more to send)
+    else
+        local fn = Games.results[f.g or ""] or (ONE_V_ONE[f.g or ""] and TakeOneVOne)
+        if not fn then return end
+        answer = fn(f, sender)
+    end
+    if not answer then return end
+    if answer == "ok" then Settled(f.id, sender) end -- they have it: ours needn't go to them any more
+    ns.Comm.Send("GG_ACK", { id = f.id, x = answer ~= "ok" and answer or nil }, sender)
+end)
+
+ns.Comm.On("GG_ACK", function(f, sender)
+    local r = f.id and ns.charDB and ns.charDB.results and ns.charDB.results[f.id]
+    local kind = type(r) == "table" and r.g or nil
+    if not Settled(f.id, sender) then return end
+    if f.x == "u" then
+        ns.Log("|cffff8040%s's addon has no record of your %s together, so it didn't take the result|r - your ledgers may not match. Check with them.",
+            ns.Short(sender), KIND_TEXT[kind] or "game")
+    elseif f.x == "d" then
+        Games.WarnDiffers(f.id, kind, sender)
+    end
+end)
