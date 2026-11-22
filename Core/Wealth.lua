@@ -2,6 +2,9 @@
 -- (nobody can read anyone else's bags): gold on hand, its peak and 7-day change, level/class,
 -- lifetime PvP kills, and a few GuildGambit records worked out from its own ledger.
 -- One WEALTH message on the guild channel; each alt is its own entry.
+-- A row only comes from its owner, so on its own it only reaches whoever is online with them:
+-- addons also pass rows on to each other (the newest wins), as the leaderboard does - see
+-- Board.NewRelay, set up at the end of this file.
 local ADDON_NAME, ns = ...
 local Comm, Compat = ns.Comm, ns.Compat
 
@@ -147,7 +150,17 @@ local function Store(name, s)
         end
     end
     s.seen = time()
+    s.at = tonumber(s.at) or 0 -- when its owner's numbers last changed: the newest wins
     t[name] = s
+end
+
+--- When my own numbers last changed (remembered per character).
+local function MyAt(text)
+    if not ns.charDB then return 0 end
+    if ns.charDB.wealthSig ~= text or not ns.charDB.wealthAt then
+        ns.charDB.wealthSig, ns.charDB.wealthAt = text, ns.Ledger.Now()
+    end
+    return ns.charDB.wealthAt
 end
 
 local function FromFields(f)
@@ -167,11 +180,16 @@ local lastSent
 --- repeat the last one exactly, unless forced.
 function Wealth.Send(target, force)
     local s = Wealth.Mine()
-    Store(ns.Me(), s)
     local f = Fields(s)
     local text = Comm.Encode("WEALTH", f)
+    s.at = MyAt(text)
+    Store(ns.Me(), s)
     if not target and not force and text == lastSent then return end
     if not target then lastSent = text end
+    f.v = s.at
+    -- (never at the price of the row itself: if the stamp would make the message too long to
+    -- send, it goes without one, and receivers stamp it on arrival as they do for older addons)
+    if #Comm.Encode("WEALTH", f) > 255 then f.v = nil end
     Comm.Send("WEALTH", f, target, { key = "WEALTH" .. (target or "") })
 end
 
@@ -205,8 +223,19 @@ Comm.On("WREQ", function(f, sender)
     C_Timer.After(0.5 + math.random() * 4, function() Wealth.Send(nil, true) end)
 end)
 
+-- A player's own row, from that player: always taken.
 Comm.On("WEALTH", function(f, sender)
-    Store(sender, FromFields(f))
+    local s = FromFields(f)
+    s.at = tonumber(f.v)
+    if not s.at then
+        -- an older addon doesn't stamp its row: it's as new as when we first heard these numbers
+        local cur = Wealth.Table()[ns.Full(sender) or sender]
+        local ok, same = pcall(function()
+            return cur ~= nil and Comm.Encode("W", Fields(cur)) == Comm.Encode("W", Fields(s))
+        end)
+        s.at = (ok and same and tonumber(cur.at)) or ns.Ledger.Now()
+    end
+    Store(sender, s)
     if ns.WealthUI then ns.WealthUI.Refresh() end
 end)
 
@@ -227,4 +256,27 @@ function Wealth.List()
         return a.name < b.name
     end)
     return list
+end
+
+---------------------------------------------------------------------------
+-- Passing rows on (WSUM / WWANT / WROW): see Board.NewRelay. Only current guild members' rows.
+---------------------------------------------------------------------------
+if ns.Board and ns.Board.NewRelay then
+    Wealth.relay = ns.Board.NewRelay({
+        sum = "WSUM", want = "WWANT", row = "WROW",
+        table = Wealth.Table,
+        shown = function(name) return not ns.Guild.rosterKnown or ns.Guild.IsMember(name) end,
+        fields = Fields,
+        take = function(owner, f, at)
+            local s = FromFields(f)
+            s.at = at
+            Store(owner, s)
+            if ns.WealthUI then ns.WealthUI.Refresh() end
+        end,
+    })
+end
+
+--- Tells the guild which wealth rows we hold and how new each is (a little after login).
+function Wealth.SendDigest()
+    if Wealth.relay then Wealth.relay.SendDigest() end
 end

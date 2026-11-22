@@ -1066,6 +1066,23 @@ local function TakeTurnState(f, sender)
     local same = k == game.n and game.max == m and #alive == #(game.alive or {})
         and ns.SameName(game.alive[game.turnIdx] or "", alive[i])
     if same then return end
+    if k == game.n then
+        -- Two addons left the last step differently (a roll that came in just as its roller was
+        -- timed out, say). Taking "whichever view arrived last" left different addons on
+        -- different views, so one rule decides it the same way everywhere: the smaller range
+        -- wins (a roll happened); at the same range, fewer players left (someone forfeited and
+        -- we missed it); and then the turn's name in alphabetical order.
+        local mineAlive = #(game.alive or {})
+        local better
+        if m ~= game.max then
+            better = m < game.max
+        elseif #alive ~= mineAlive then
+            better = #alive < mineAlive
+        else
+            better = (ns.Full(alive[i]) or ""):lower() < (ns.Full(game.alive[game.turnIdx] or "") or ""):lower()
+        end
+        if not better then return end
+    end
     Rolls.UnwatchPrefix(game.id .. ":")
     -- keep our own spelling of our name in the list
     for j, n in ipairs(alive) do

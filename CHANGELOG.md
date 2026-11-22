@@ -5,6 +5,11 @@ Newest first. Versioning rules: see VERSIONING.md. Add new changes under "Unrele
 
 ## Unreleased
 
+## 2.7.1 - 2026-11-22
+
+- **Wealth chart: everyone sees the same numbers.** Like the leaderboard before 2.7.0, a player's row only reached whoever was online with them. Addons now pass wealth rows on to each other at login, and the newest always wins.
+- **Group deathroll: one rule when two addons disagree about a turn.** If a roll came in just as its roller was being timed out, addons used to take whichever view reached them last, so different players could see different things until the next roll. Every addon now settles it the same way: a roll beats a time-out, and a forfeit you'd missed still counts.
+
 ## 2.7.0 - 2026-11-22
 
 - **Addons now agree with each other.** A sweep for every way two players' addons could end up with different numbers. Nearly all of them came down to one message being sent once and never checked, or to news only reaching whoever was online at that moment.

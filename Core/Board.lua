@@ -473,3 +473,167 @@ Comm.On("BROW", function(f, sender, channel)
     Store(owner, FromFields(f), at)
     if ns.UI then ns.UI.Refresh() end
 end)
+
+---------------------------------------------------------------------------
+-- The same passing-on for another table of per-player rows (the wealth chart uses it). It is
+-- the scheme above, kept separate so the leaderboard's own code stays exactly as it was:
+-- on login we tell the guild which rows we hold and how new (cfg.sum), anyone holding a newer
+-- one broadcasts it (cfg.row), anyone holding an older one asks for it (cfg.want). The newest
+-- stamp ("at", set by the row's owner) wins; nobody takes their own row from others.
+--   cfg: sum, want, row = message types; table() = name -> row (each with .at);
+--        shown(name, row) = worth passing on; fields(row) = its message fields;
+--        take(owner, fields, at) = store one that was passed on.
+-- A row too long for one message goes out as two halves (p=1, p=2) and is taken once both are in.
+---------------------------------------------------------------------------
+function Board.NewRelay(cfg)
+    local relay = { aired = {}, outbox = {}, queued = {}, lists = {}, halves = {} }
+    local airing = false
+
+    local function AiredLately(name, at)
+        local a = relay.aired[name]
+        return a ~= nil and a.at >= at and GetTime() - a.t < Board.AIRED_FOR
+    end
+
+    local function Rows()
+        local ok, t = pcall(cfg.table)
+        return ok and type(t) == "table" and t or {}
+    end
+
+    local function Worth(name, r)
+        if type(r) ~= "table" or ns.IsMe(name) or name:find("[:;]") then return false end
+        local ok, yes = pcall(cfg.shown, name, r)
+        return ok and yes and true or false
+    end
+
+    function relay.SendDigest()
+        if not (ns.db and ns.charDB) then return end
+        local items = {}
+        for name, r in pairs(Rows()) do
+            if Worth(name, r) then items[#items + 1] = name .. ":" .. (tonumber(r.at) or 0) end
+        end
+        table.sort(items)
+        Batched(items, function(part) Comm.Send(cfg.sum, { b = part }, nil) end)
+    end
+
+    local function SendRow(name, r)
+        local ok, f = pcall(cfg.fields, r)
+        if not ok or type(f) ~= "table" then return false end
+        local at = tonumber(r.at) or 0
+        f.o, f.v = name, at
+        if #Comm.Encode(cfg.row, f) <= 255 then
+            Comm.Send(cfg.row, f, nil)
+            return true
+        end
+        -- too long for one message: two halves
+        local keys = {}
+        for k in pairs(f) do if k ~= "o" and k ~= "v" then keys[#keys + 1] = k end end
+        table.sort(keys)
+        local half = math.ceil(#keys / 2)
+        local parts = { { o = name, v = at, p = 1 }, { o = name, v = at, p = 2 } }
+        for i, k in ipairs(keys) do parts[i <= half and 1 or 2][k] = f[k] end
+        for _, part in ipairs(parts) do
+            if #Comm.Encode(cfg.row, part) > 255 then return false end
+        end
+        for _, part in ipairs(parts) do Comm.Send(cfg.row, part, nil) end
+        return true
+    end
+
+    local function AirNext()
+        while relay.outbox[1] do
+            local name = table.remove(relay.outbox, 1)
+            relay.queued[name] = nil
+            local r = Rows()[name]
+            if r and Worth(name, r) and not AiredLately(name, tonumber(r.at) or 0) then
+                relay.aired[name] = { at = tonumber(r.at) or 0, t = GetTime() }
+                if SendRow(name, r) then
+                    C_Timer.After(Board.AIR_EVERY, AirNext)
+                    return
+                end
+            end
+        end
+        airing = false
+    end
+
+    local function Air(name)
+        if relay.queued[name] then return end
+        relay.queued[name] = true
+        relay.outbox[#relay.outbox + 1] = name
+        if airing then return end
+        airing = true
+        C_Timer.After(Hash(ns.Me() or "") % 20 / 20, AirNext)
+    end
+
+    local function Answer(sender, d)
+        local t, me = Rows(), ns.Me() or ""
+        local offers, wants = {}, {}
+        for name, r in pairs(t) do
+            if Worth(name, r) and not ns.SameName(name, sender) and not OwnerOnline(name)
+                and (tonumber(r.at) or 0) > (d[name] or -1) then
+                offers[#offers + 1] = name
+            end
+        end
+        for name, at in pairs(d) do
+            local r = t[name]
+            if not ns.IsMe(name) and not OwnerOnline(name) and (not r or (tonumber(r.at) or 0) < at) then
+                wants[#wants + 1] = name
+            end
+        end
+        table.sort(offers, function(a, b)
+            local ha, hb = Hash(a .. me), Hash(b .. me)
+            if ha ~= hb then return ha < hb end
+            return a < b
+        end)
+        for _, name in ipairs(offers) do Air(name) end
+        if #wants > 0 then
+            table.sort(wants)
+            Batched(wants, function(part) Comm.Send(cfg.want, { b = part }, sender) end)
+        end
+    end
+
+    Comm.On(cfg.sum, function(f, sender, channel)
+        if channel ~= "GUILD" then return end
+        local job = relay.lists[sender] or { d = {}, gen = 0 }
+        relay.lists[sender] = job
+        for name, at in (f.b or ""):gmatch("([^:;]+):(%d+)") do job.d[name] = tonumber(at) end
+        job.gen = job.gen + 1
+        local gen = job.gen
+        local wait = Board.ANSWER_MIN + Hash((ns.Me() or "") .. sender) % Board.ANSWER_SPREAD
+        C_Timer.After(wait, function()
+            if relay.lists[sender] ~= job or job.gen ~= gen then return end
+            relay.lists[sender] = nil
+            if ns.db and ns.charDB then Answer(sender, job.d) end
+        end)
+    end)
+
+    Comm.On(cfg.want, function(f)
+        local t = Rows()
+        for name in (f.b or ""):gmatch("[^;]+") do
+            if t[name] and Worth(name, t[name]) then Air(name) end
+        end
+    end)
+
+    Comm.On(cfg.row, function(f, sender, channel)
+        if channel ~= "GUILD" then return end
+        local at = tonumber(f.v)
+        local owner = type(f.o) == "string" and f.o ~= "" and (ns.Full(f.o) or f.o) or nil
+        if not at or not owner or ns.IsMe(owner) or ns.SameName(owner, sender) then return end
+        if f.p then
+            -- one half of a long row: wait for the other
+            local key = sender .. "|" .. owner .. "|" .. at
+            local h = relay.halves[key] or { f = {}, got = {} }
+            relay.halves[key] = h
+            for k, v in pairs(f) do if k ~= "p" then h.f[k] = v end end
+            h.got[f.p] = true
+            if not (h.got["1"] and h.got["2"]) then return end
+            relay.halves[key] = nil
+            f = h.f
+        end
+        local a = relay.aired[owner]
+        if not a or a.at <= at then relay.aired[owner] = { at = at, t = GetTime() } end
+        local cur = Rows()[owner]
+        if cur and (tonumber(cur.at) or 0) >= at then return end
+        cfg.take(owner, f, at)
+    end)
+
+    return relay
+end

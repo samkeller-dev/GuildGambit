@@ -86,7 +86,13 @@ function House.SayHello()
     if ns.Lottery and ns.Lottery.OnLogin then
         C_Timer.After(ns.Board and ns.Board.DIGEST_DELAY or 10, function() ns.Lottery.OnLogin() end)
     end
-    if ns.Wealth then ns.Wealth.Send(nil, true) end
+    if ns.Wealth then
+        ns.Wealth.Send(nil, true)
+        -- (after the leaderboard's comparison, so the two don't go out together)
+        if ns.Wealth.SendDigest then
+            C_Timer.After((ns.Board and ns.Board.DIGEST_DELAY or 10) + 8, function() ns.Wealth.SendDigest() end)
+        end
+    end
 end
 
 --- Asks one player for their version (they answer with a HELLO reply).
